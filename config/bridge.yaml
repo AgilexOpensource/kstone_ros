@@ -1,0 +1,21 @@
+/**:
+  ros__parameters:
+    topic_prefix: "~"
+    world_frame: world
+    base_frame: base_link
+    duration: 0.0
+    command_timeout_s: 0.5
+    feedback_timeout_s: 0.25
+    stamped_message_timeout_s: 0.5
+    state_rate_hz: 10.0
+    # Driver command OUTPUTS; chassis bare Twist uses the chassis body frame.
+    joint_command_topic: ~/feedback/joint_states
+    base_command_topic: ~/feedback/cmd_vel
+    # Driver sensing INPUTS; driver OUTPUTS stay silent until this feedback is fresh and synced.
+    feedback_joint_topic: ~/joint_states
+    feedback_base_topic: ""
+    publish_tf: false
+    # kstone DebugServer for kstone-viewer; 0 = off. Non-loopback debug_host requires debug_token (or $KSTONE_TOKEN).
+    debug_port: 0
+    debug_host: 127.0.0.1
+    debug_token: ""

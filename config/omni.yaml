@@ -1,0 +1,46 @@
+# Self-contained geometric model with a planar omnidirectional base.
+model:
+  file: omni.urdf
+  root: free_flyer
+  mimic: coupled
+rate_hz: 50
+feedback_timeout_s: 0.25
+safety:
+  mode: reject
+solver:
+  mode: layered_independent
+  damping: 0.001
+robot:
+  type: loopback
+modules:
+  chassis:
+    type: chassis
+    chassis:
+      kinematics: omni
+      base_frame: base_link
+      command_timeout_s: 0.25
+      max_linear_velocity: 0.3
+      max_angular_velocity: 0.8
+      max_linear_acceleration: 1.0
+      max_linear_deceleration: 1.0
+      max_linear_reversal_deceleration: 1.0
+      max_angular_acceleration: 2.0
+      max_angular_deceleration: 2.0
+      max_angular_reversal_deceleration: 2.0
+      max_linear_jerk: 5.0
+      max_angular_jerk: 10.0
+  tool_pose:
+    type: frame_target
+    frame: tool_link
+    reference: base_link
+    joints: [slide_x, slide_y, slide_z]
+    orientation_weight: [0.0, 0.0, 0.0]
+    gain: 0.5
+    task: {level: 1}
+    trajectory:
+      position: {velocity: 0.2, acceleration: 0.5, jerk: 3.0}
+      orientation: {}
+  gripper_joint:
+    type: joint_target
+    joints: [finger_joint]
+    trajectory: {velocity_scale: 0.5}
