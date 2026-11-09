@@ -93,6 +93,16 @@ struct Fixture {
     return path.string();
   }
 };
+// Feeds fresh joints each cycle until the attach window completes; returns the cycles taken.
+int attach(Fixture &f, Controller &c, const JointValues &j) {
+  for (int i = 1; i <= 30; ++i) {
+    c.feedback_joints(j.names, j.positions);
+    cycle(c);
+    if (c.joints_attached) return i;
+    f.advance();
+  }
+  throw std::runtime_error("feedback did not attach: " + c.fault);
+}
 class InstrumentedRobot final : public kstone::RobotInterface {
 public:
   InstrumentedRobot(const Controller &seed,std::shared_ptr<const kstone::Clock> clock)
@@ -109,7 +119,9 @@ public:
       std::string component="driver", message="owned temporary log view";
       for(int i=0;i<300;++i)logs->write({kstone::LogLevel::warn,component,message,0});
     }
-    auto status=loop_.read(state);if(unknown_stamp)state.stamp_ns=-1;return status;
+    auto status=loop_.read(state);
+    if(unknown_stamp){state.stamp_ns=-1;std::fill(state.group_stamps_ns.begin(),state.group_stamps_ns.end(),-1);}
+    return status;
   }
   kstone::Status write(const kstone::RobotCommand &command) override {
     ++writes; write_thread=std::hash<std::thread::id>{}(std::this_thread::get_id());
@@ -498,9 +510,8 @@ int main() {
       check(cycle(c) && !c.joints_attached, "partial gate");
       auto j = c.joint_state(c.measured());
       for (std::size_t i = 0; i < j.names.size(); ++i) if (j.names[i] == "slide_x") j.positions[i] = 0.01;
-      c.feedback_joints(j.names, j.positions);
       f.advance();
-      check(cycle(c) && c.joints_attached, c.fault);
+      check(attach(f, c, j) > 10 && c.written && c.fault.empty(), "attach waits for the feedback window");
       check(c.command_q().isApprox(c.measured(), 1e-9), "attach syncs command to measured without a jump");
       auto before = c.measured();
       rejects([&] { c.feedback_joints({"slide_x"}, {5}); });
@@ -512,9 +523,7 @@ int main() {
         cycle(c);
       }
       check(c.written && !c.joints_attached && c.fault.empty(), "stale detaches without pausing");
-      c.feedback_joints(j.names, j.positions);
-      f.advance();
-      check(cycle(c) && c.joints_attached, c.fault);
+      check(attach(f, c, j) > 10 && c.written, c.fault);
     });
     test("continuous feedback coordinates",
          [] {
@@ -541,11 +550,15 @@ int main() {
       Fixture f;
       Controller c(f.config(false, true), f.options(true, true));
       auto j = c.joint_state(c.measured());
-      c.feedback_joints(j.names, j.positions);
-      check(cycle(c) && c.joints_attached && !c.base_attached, "base waits for odometry");
-      c.feedback_base(make_pose({1, 2, 0}, {2, 0, 0, 0}));
-      f.advance();
-      check(cycle(c) && c.base_attached, c.fault);
+      check(attach(f, c, j) > 0 && !c.base_attached, "base waits for odometry");
+      int cycles = 0;
+      for (; cycles < 30 && !c.base_attached; ++cycles) {
+        f.advance();
+        c.feedback_joints(j.names, j.positions);
+        c.feedback_base(make_pose({1, 2, 0}, {2, 0, 0, 0}));
+        check(cycle(c), c.fault);
+      }
+      check(c.base_attached && cycles > 10, "base attaches after the feedback window");
       check(c.base_pose().translation().isApprox(Eigen::Vector3d(1, 2, 0)),
             "measured root");
     });
@@ -561,8 +574,7 @@ int main() {
       });
       Controller c(file, f.options(true));
       auto j = c.joint_state(c.measured());
-      c.feedback_joints(j.names, j.positions);
-      check(cycle(c) && c.joints_attached, "attach before commanding");
+      check(attach(f, c, j) > 0 && c.written, "attach before commanding");
       kstone::PortValue value;
       value.pose = c.pose("tool_pose", "target");
       value.pose.translation().x() += 0.1;
@@ -578,13 +590,20 @@ int main() {
       Fixture f;
       Controller c(KSTONE_TEST_CONFIG, f.options(true, true));
       auto j = c.joint_state(c.measured());
-      c.feedback_joints(j.names, j.positions);
-      c.feedback_base(
-          make_pose({1, 2, 0}, {std::sqrt(0.5), 0, 0, std::sqrt(0.5)}));
+      attach(f, c, j);
+      const auto odom =
+          make_pose({1, 2, 0}, {std::sqrt(0.5), 0, 0, std::sqrt(0.5)});
+      for (int i = 0; i < 30 && !c.base_attached; ++i) {
+        f.advance();
+        c.feedback_joints(j.names, j.positions);
+        c.feedback_base(odom);
+        check(cycle(c), c.fault);
+      }
       for (int i = 0; i < 9; ++i) {
         c.write("chassis", "velocity", vector({0.1, 0, 0}));
         f.advance();
         c.feedback_joints(j.names, j.positions);
+        c.feedback_base(odom);
         check(cycle(c), c.fault);
       }
       auto root = c.base_pose();
@@ -675,11 +694,11 @@ int main() {
     });
     test("full per-joint freshness survives coalesced partial feedback", [] {
       Fixture f;Controller c(f.config(true,true),f.options(true));
-      auto j=c.joint_state(c.measured());c.feedback_joints(j.names,j.positions);cycle(c);
+      auto j=c.joint_state(c.measured());attach(f,c,j);
       for(int i=0;i<10;++i){f.advance();cycle(c);}
       c.feedback_joints({"slide_x"},{0.01});f.advance();cycle(c);
       f.advance(0.08);cycle(c);check(!c.joints_attached,"partial feedback renewed unrelated joints");
-      c.feedback_joints(j.names,j.positions);f.advance();check(cycle(c) && c.joints_attached,c.fault);
+      f.advance();check(attach(f,c,j)>0 && c.written,c.fault);
     });
     test("finite logical duration completes safely without ROS consumer", [] {
       Fixture f;Options o;o.duration_s=0.2;
@@ -851,14 +870,14 @@ int main() {
     });
     test("sensing loss detaches output and reattach rebases targets to measured", [] {
       Fixture f;Controller c(f.config(true,true),f.options(true));
-      auto j=c.joint_state(c.measured());c.feedback_joints(j.names,j.positions);
-      check(cycle(c) && c.joints_attached,c.fault);
+      auto j=c.joint_state(c.measured());
+      check(attach(f,c,j)>0 && c.written,c.fault);
       c.write("gripper_joint","target",vector({0.03}));f.advance();cycle(c);
       for(int i=0;i<15;++i){f.advance();cycle(c);}
       check(!c.joints_attached && enabled(c,"gripper_joint") && c.fault.empty(),"loss must detach without disabling modules");
       for(std::size_t i=0;i<j.names.size();++i) if(j.names[i]=="finger_joint") j.positions[i]=0.01;
-      c.feedback_joints(j.names,j.positions);f.advance();
-      check(cycle(c) && c.joints_attached && enabled(c,"gripper_joint"),c.fault);
+      f.advance();
+      check(attach(f,c,j)>0 && c.written && enabled(c,"gripper_joint"),c.fault);
       check(c.command_q().isApprox(c.measured(),1e-9),"reattach output jumped away from measured");
       const auto at=c.command_q();
       for(int i=0;i<15;++i){f.advance();c.feedback_joints(j.names,j.positions);cycle(c);}

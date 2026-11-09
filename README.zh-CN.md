@@ -95,8 +95,8 @@ ros2 topic pub -r 10 /kstone/chassis/control/cmd_vel \
 驱动输出以真机反馈为前提，避免真机接入时跳向过期的模型目标：
 
 - `~/joint_states` 覆盖所有未锁定关节且新鲜之前，`~/feedback/joint_states` 不发布；`~/odom` 新鲜之前（仅自由根），`~/feedback/cmd_vel` 不发布。
-- 接入时实测状态覆盖模型命令，模块目标重置为实测值；已使能的模块保持使能。
-- 关节和底盘分别门控。反馈过期（`feedback_timeout_s`）后对应输出断开：关节命令停发；`cmd_vel` 先发一个 `command_timeout_s` 的零速，再停发。反馈恢复新鲜后重新接入。
+- 接入需要反馈连续新鲜 `feedback_timeout_s`。窗口内每个周期都用实测状态覆盖模型命令（第一个周期还把模块目标重置为实测值），因此发布的第一条命令从当前实测状态出发；已使能的模块保持使能。
+- 关节和底盘分别门控：除非 YAML 的 `feedback_groups` 另行指定，自由根单独作为引擎反馈组 `base`。反馈过期（`feedback_timeout_s`）后对应输出断开：关节命令停发；`cmd_vel` 先发一个 `command_timeout_s` 的零速，再停发。反馈恢复新鲜后重新接入。
 - 没有反馈时引擎照常运行；不提供 dry-run 模式。无真机测试时，可由仿真器（如 MuJoCo 仿真包）发布 `~/joint_states`/`~/odom`，或使用模型功能包的 RViz launch。
 
 ### 引擎话题
@@ -168,9 +168,8 @@ URDF 路径可相对 YAML。驱动发布新鲜的 `~/joint_states`（自由根�
 | `world_frame`, `base_frame` | `world`、`base_link`：世界和模型根坐标系；底盘机体坐标系来自 YAML 的 `base_frame` |
 | `publish_tf` | `false`；可选发布世界 → 模型根 TF，要求自由根且两个坐标系不同 |
 | `chassis_module` | 空：自动选择；指定时须为拥有模型根的底盘 |
-| `command_timeout_s` | `0.5`；引擎应用命令时，若命令已超过该时间（或更短的正值端口超时）则拒绝 |
-| `feedback_timeout_s` | `0.25`；保持驱动输出接入所需的驱动反馈新鲜度 |
-| `stamped_message_timeout_s` | `0.5`；拒绝过期/未来的非零 ROS 时间戳；零时间戳按接收时间处理 |
+| `command_timeout_s` | `0.5`；引擎应用命令时，若命令已超过该时间（或更短的正值端口超时）则拒绝；也拒绝过期/未来的非零命令时间戳 |
+| `feedback_timeout_s` | `0.25`；保持驱动输出接入所需的驱动反馈新鲜度；也拒绝过期/未来的非零反馈时间戳，并限定底盘里程计时效。零时间戳按接收时间处理 |
 | `state_rate_hz` | `10`；state 话题的频率。feedback pose、驱动命令（`feedback/joint_states`、`feedback/cmd_vel`）和 TF 跟随引擎频率 |
 | `debug_port`、`debug_host`、`debug_token` | `0`（关闭）、`127.0.0.1`、空；启动 kstone DebugServer 供 `kstone-viewer` 连接。非回环地址必须设置 token；token 为空时读取 `$KSTONE_TOKEN`。launch 参数 `debug_port:=7311` 可覆盖参数文件。同一端口上 ROS 命令优先于 viewer 的运动编辑 |
 | 驱动话题覆盖 | `feedback_joint_topic`、`feedback_base_topic`、`joint_command_topic`、`base_command_topic`，见默认配置；非空 `feedback_base_topic` 启用额外的模型根 `PoseStamped` 感知 |

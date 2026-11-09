@@ -199,8 +199,14 @@ private:
   double owner_dt_{}, owner_limit_{}, owner_elapsed_{}, last_owner_time_{-1};
   // One tolerance for every cycle-gap check: three periods, never below 100 ms.
   static double scheduler_limit(double dt) { return std::max(0.1,3*dt); }
-  bool latched_{false}, joints_synced_{false}, base_synced_{false}, base_pending_{false};
+  bool latched_{false}, base_fresh_{false}, base_pending_{false};
   std::vector<unsigned char> required_;  // per joints_: needed for joint attach
+  // Engine feedback groups: per joints_, the root's (npos without one), and which hold a joints_ entry.
+  std::vector<std::size_t> joint_group_;
+  std::size_t base_group_{std::size_t(-1)};
+  std::vector<unsigned char> joint_groups_;
+  std::vector<double> group_oldest_;
+  std::uint64_t seen_attaches_{0};
   Eigen::Isometry3d base_feedback_pose_{Eigen::Isometry3d::Identity()};
   double base_receipt_{-1};
   Text<192> owner_fault_;
@@ -217,8 +223,8 @@ private:
   void apply(const Command &);
   void outcome(std::uint64_t, bool, std::string_view = {});
   void clear_motion();
-  bool joints_fresh(double) const;
-  bool base_fresh(double) const;
+  bool joints_synced() const;
+  bool base_synced() const;
   void write_port(std::size_t, std::size_t, const kstone::PortValue &, double, double application_time = -1);
   void apply_joint_targets(const JointBatch &);
   void start_home(std::size_t, double);

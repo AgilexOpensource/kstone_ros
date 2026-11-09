@@ -294,8 +294,11 @@ def test_dds_feedback_gates_commands_and_resumes_on_fresh_sensing(start_node, pr
     probe.spin_for(bridge, 0.1)
     assert not commands
     measured = [0.05, -0.02, 0.1, 0.01]
-    feedback.publish(JointState(name=JOINT_NAMES, position=measured))
-    probe.wait(bridge, lambda: commands and states[-1]["joints_attached"])
+    def attached(position):
+        # Attach needs feedback that stays fresh for the whole feedback_timeout_s window.
+        feedback.publish(JointState(name=JOINT_NAMES, position=position))
+        return commands and states[-1]["joints_attached"]
+    probe.wait(bridge, lambda: attached(measured))
     # First output after attach equals the measured state: no jump.
     assert dict(zip(commands[0].name, commands[0].position)) == pytest.approx(dict(zip(JOINT_NAMES, measured)), abs=1e-6)
     probe.wait(bridge, lambda: not states[-1]["joints_attached"])
@@ -304,8 +307,7 @@ def test_dds_feedback_gates_commands_and_resumes_on_fresh_sensing(start_node, pr
     before = len(commands)
     probe.spin_for(bridge, 0.2)
     assert len(commands) == before and not states[-1]["fault"]
-    feedback.publish(JointState(name=JOINT_NAMES, position=INITIAL_POSITIONS))
-    probe.wait(bridge, lambda: len(commands) > before and states[-1]["joints_attached"])
+    probe.wait(bridge, lambda: attached(INITIAL_POSITIONS) and len(commands) > before)
 
 
 def test_feedback_chassis_uses_base_odometry_and_gates_stale_base(start_node, probe):

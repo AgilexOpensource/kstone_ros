@@ -43,7 +43,6 @@ public:
           "topic_prefix, world_frame and base_frame must be nonempty");
     options.command_timeout_s = parameter<double>("command_timeout_s", 0.5);
     options.feedback_timeout_s = parameter<double>("feedback_timeout_s", 0.25);
-    stamp_timeout_ = parameter<double>("stamped_message_timeout_s", 0.5);
     state_rate_ = parameter<double>("state_rate_hz", 10.0);
     options.chassis_module = parameter<std::string>("chassis_module", "");
     const auto feedback_joint =
@@ -55,10 +54,10 @@ public:
     const auto base_command =
         parameter<std::string>("base_command_topic", topic("feedback/cmd_vel"));
     const bool publish_tf = parameter<bool>("publish_tf", false);
-    if (!std::isfinite(stamp_timeout_) || stamp_timeout_ <= 0 ||
-        !std::isfinite(state_rate_) || state_rate_ <= 0)
-      throw std::invalid_argument("state_rate_hz and stamped_message_timeout_s "
-                                  "must be finite and positive");
+    if (!std::isfinite(state_rate_) || state_rate_ <= 0)
+      throw std::invalid_argument("state_rate_hz must be finite and positive");
+    command_timeout_ = options.command_timeout_s;
+    feedback_timeout_ = options.feedback_timeout_s;
     const auto variables = parse_json(vars);
     if (variables.kind() != kstone::ConfigNode::Kind::map)
       throw std::invalid_argument(
@@ -371,13 +370,13 @@ private:
   }
   void joint_target_header(const std_msgs::msg::Header &header) {
     const double a=age(header);
-    if(a<0 || a>stamp_timeout_) throw std::invalid_argument("stale/future stamped joint target");
+    if(a<0 || a>command_timeout_) throw std::invalid_argument("stale/future stamped joint target");
     if(!header.frame_id.empty())
       throw std::invalid_argument("joint target frame_id must be empty; named joint coordinates need no TF conversion");
   }
   double feedback_age(const std_msgs::msg::Header &header) {
     const double a = age(header);
-    if (a < 0 || a > stamp_timeout_)
+    if (a < 0 || a > feedback_timeout_)
       throw std::invalid_argument(
           "feedback timestamp is stale or in the future");
     return a;
@@ -386,7 +385,7 @@ private:
                                bool validate_stamp = true) {
     if (validate_stamp) {
       const double a = age(msg.header);
-      if (a < 0 || a > stamp_timeout_)
+      if (a < 0 || a > command_timeout_)
         throw std::invalid_argument(
             "message timestamp is stale or in the future");
     }
@@ -533,7 +532,7 @@ private:
   kstone_ros::Node discovery_, interfaces_{kstone_ros::Node::list()};
   std::unique_ptr<Controller> core_;
   std::string prefix_, world_, base_;
-  double stamp_timeout_{0.5}, state_rate_{10}, timer_dt_{0};
+  double command_timeout_{0.5}, feedback_timeout_{0.25}, state_rate_{10}, timer_dt_{0};
   std::optional<double> next_state_, base_zero_until_;
   double base_hold_{0.5};
   std::map<std::string, double> warnings_;

@@ -46,7 +46,6 @@ modules:
   chassis:
     type: chassis
     chassis:
-      odom_timeout_s: 0.25
       command_timeout_s: 0.25
       kinematics: differential
       base_frame: chassis_base_link

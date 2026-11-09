@@ -103,13 +103,15 @@ class Controller::FeedbackRobot : public kstone::RobotInterface {
 public:
   Eigen::VectorXd measured, velocity;
   std::int64_t stamp{-1};
+  std::vector<std::int64_t> groups;  // per engine feedback group
   const kstone::JointInfo *root{nullptr};
   bool chassis{false};
   kstone::Status read(kstone::RobotState &state) override {
-    state.q = measured; state.v = velocity; state.stamp_ns = stamp; return {};
+    state.q = measured; state.v = velocity; state.stamp_ns = stamp;
+    std::copy_n(groups.begin(), std::min(groups.size(), state.group_stamps_ns.size()), state.group_stamps_ns.begin());
+    return {};
   }
   kstone::Status write(const kstone::RobotCommand &command) override {
-    if (!command.fresh) return kstone::make_error(kstone::ErrorCode::invalid_argument, "stale feedback command");
     if (root && !chassis && command.v.segment(root->idx_v, 6).cwiseAbs().maxCoeff() > 1e-8)
       return kstone::make_error(kstone::ErrorCode::unsupported, "floating-root actuation requires a chassis or kstone driver");
     return {};
@@ -153,8 +155,19 @@ Controller::Controller(const std::string &file, Options options)
     feedback_->measured = initial_engine.state().q;
     feedback_->velocity =
         Eigen::VectorXd::Zero(initial_engine.modules().model()->nv());
-    // Feedback freshness is gated per subset by the controller, never by pausing the engine.
-    config.set("feedback_timeout_s", 0.0);
+    // The free root attaches on odometry: its own feedback group unless the configuration places it.
+    const auto &bm = *initial_engine.modules().model();
+    for (const auto &j : bm.joints()) {
+      if (j.nq != 7 || j.nv != 6) continue;
+      const auto layout = take(kstone::resolve_feedback_groups(bm, initial_engine.options().feedback_groups));
+      if (layout.names[layout.joint_group[j.id]] == "default") {
+        auto groups = config.find("feedback_groups") ? *config.find("feedback_groups") : kstone::ConfigNode::list();
+        groups.append(kstone::ConfigNode::map({{"name", "base"}, {"joints", kstone::ConfigNode::list({kstone::ConfigNode(j.name)})}}));
+        config.set("feedback_groups", std::move(groups));
+      }
+      break;
+    }
+    config.set("feedback_timeout_s", options_.feedback_timeout_s);
     // Feedback safety cannot be disabled by a solver configuration.
     auto safety = config.find("safety") ? *config.find("safety") : Node::map();
     safety.set("mode", "reject");
@@ -233,6 +246,12 @@ Controller::Controller(const std::string &file, Options options)
   if (feedback_) {
     feedback_->root = root_;
     feedback_->chassis = bool(chassis_);
+    const auto layout = take(kstone::resolve_feedback_groups(*model(), engine_->options().feedback_groups));
+    feedback_->groups.assign(layout.names.size(), -1);
+    group_oldest_.assign(layout.names.size(), -1);
+    joint_groups_.assign(layout.names.size(), 0);
+    for (const auto &j : joints_) { joint_group_.push_back(layout.joint_group[j.id]); joint_groups_[joint_group_.back()] = 1; }
+    if (root_) base_group_ = layout.joint_group[root_->id];
   }
   for (const auto &m : engine_->modules().modules()) {
     auto info = std::make_shared<ModuleInfo>();
@@ -272,8 +291,8 @@ Controller::Controller(const std::string &file, Options options)
   if (options_.debug) debug_ = take(kstone::DebugServer::start(*engine_, *options_.debug));
   capture(false); snapshots_.acquire();
   fresh = true;
-  joints_attached = joints_synced_;
-  base_attached = base_synced_;
+  joints_attached = !feedback_ || joints_synced();
+  base_attached = feedback_ && base_synced();
 }
 void validate_port(const kstone::PortInfo &i, const kstone::PortValue &v) {
   if (i.type == kstone::PortType::pose) {
@@ -398,8 +417,6 @@ void Controller::apply_joint_targets(const JointBatch &batch) {
       if(!batch.touched[i] || batch.sequence<=accepted_sequences_[i]) continue;
       pending=true; const auto [mi,pi]=addresses_[i];
       const auto &m=*engine_->modules().modules()[mi];
-      if(!dynamic_cast<const kstone::JointTargetModule*>(&m))
-        throw std::runtime_error("aggregate requires a joint_target implementation");
       const auto &port=metadata_[mi]->inputs[pi];
       const double limit=port.timeout>0?std::min(port.timeout,options_.command_timeout_s):options_.command_timeout_s;
       if(t-batch.receipt>limit) throw std::runtime_error("aggregate expired before application");
@@ -414,7 +431,7 @@ void Controller::apply_joint_targets(const JointBatch &batch) {
     for(std::size_t i=0;i<batch.touched.size();++i) {
       if(!batch.touched[i] || batch.sequence<=accepted_sequences_[i]) continue;
       const auto [mi,pi]=addresses_[i]; auto &m=*engine_->modules().modules()[mi];
-      require(static_cast<kstone::JointTargetModule&>(m).set_target(batch.names[i],batch.values[i].vector));
+      require(m.write_port(pi,batch.names[i],batch.values[i].vector));
       require(m.read_port(pi,accepted_values_[i]));
       refresh_[i]=!m.enabled() || !m.running();
       needs_command_[mi]=0;
@@ -476,6 +493,7 @@ void Controller::apply(const Command &c) {
     outcome(c.sequence,true);
   } catch (const std::exception &e) { outcome(c.sequence,false,e.what()); }
 }
+static bool recent(double stamp,double t,double timeout) { return stamp>=0 && t>=stamp && t-stamp<=timeout; }
 void Controller::before(kstone::Engine &e) {
   const double t=now();
   // The gap since the last cycle was slept with the previous period; a runtime rate change must not look like a stall.
@@ -526,7 +544,13 @@ void Controller::before(kstone::Engine &e) {
     } catch(const std::exception &err) { outcome(input.sequence,false,err.what()); }
   }
   if (feedback_) {
-    const bool jf=joints_fresh(t), bf=!root_ || base_fresh(t);
+    // Per group, the oldest required stamp, so the engine's own timeout decides each group's attach.
+    std::fill(group_oldest_.begin(),group_oldest_.end(),t);
+    for (std::size_t i=0;i<joints_.size();++i) if (required_[i]) group_oldest_[joint_group_[i]]=std::min(group_oldest_[joint_group_[i]],stamps_[i]);
+    if (root_) group_oldest_[base_group_]=std::min(group_oldest_[base_group_],stamps_.back());
+    for (std::size_t g=0;g<group_oldest_.size();++g)
+      feedback_->groups[g]=group_oldest_[g]<0?-1:std::int64_t(std::llround(group_oldest_[g]*1e9));
+    const bool bf=root_ && recent(group_oldest_[base_group_],t,options_.feedback_timeout_s);
     if (base_pending_ && bf && !latched_) {
       // Exact last chassis timestamp: a reconstructed time can step past the next cycle.
       const double module_time=chassis_->output().timestamp;
@@ -534,25 +558,24 @@ void Controller::before(kstone::Engine &e) {
       const bool accepted=take(chassis_->controller()->submit_odometry(
         {p.translation().x(),p.translation().y(),std::atan2(p.linear()(1,0),p.linear()(0,0))},
         module_time-(t-base_receipt_),module_time));
-      if (accepted || t-base_receipt_>chassis_->controller()->config().odom_timeout_s) base_pending_=false;
+      if (accepted || t-base_receipt_>options_.feedback_timeout_s) base_pending_=false;
     }
     auto &m=feedback_->measured; m=e.ideal();
-    for (std::size_t i=0;i<joints_.size();++i) if (jf && required_[i])
-      m.segment(joints_[i].idx_q,joints_[i].nq)=measured_.segment(joints_[i].idx_q,joints_[i].nq);
-    if (root_ && bf) m.segment(root_->idx_q,7)=measured_.segment(root_->idx_q,7);
-    feedback_->stamp=context_.clock->now_ns();
-    const bool rise=(jf && !joints_synced_) || (root_ && bf && !base_synced_);
-    if (base_synced_ && !bf && chassis_) {
+    double oldest=t;
+    for (std::size_t i=0;i<joints_.size();++i) if (required_[i]) oldest=std::min(oldest,stamps_[i]);
+    // Stale groups report the open-loop state, not frozen measurements.
+    for (std::size_t i=0;i<joints_.size();++i)
+      if (required_[i] && recent(group_oldest_[joint_group_[i]],t,options_.feedback_timeout_s))
+        m.segment(joints_[i].idx_q,joints_[i].nq)=measured_.segment(joints_[i].idx_q,joints_[i].nq);
+    if (bf) m.segment(root_->idx_q,7)=measured_.segment(root_->idx_q,7);
+    feedback_->stamp=oldest<0?-1:std::int64_t(std::llround(oldest*1e9));
+    // The engine resyncs the chassis on reattach; a velocity accepted before the dropout must not resume.
+    if (base_fresh_ && !bf && chassis_) {
       kstone::PortValue zero; zero.vector=Eigen::Vector3d::Zero();
       require(chassis_->write_port(chassis_->port_index("velocity"),zero));
       chassis_->controller()->clear_velocity();
     }
-    joints_synced_=jf; base_synced_=root_ && bf;
-    if (rise) {
-      // A pause/resume edge makes this step copy measured into the commanded state.
-      e.set_paused(true); e.set_paused(false);
-      engine_->modules().resynchronize(true); owner_generation_=generation_.fetch_add(1)+1;
-    }
+    base_fresh_=bf;
   }
   e.set_paused(latched_);
   if (!latched_) owner_fault_.set("");
@@ -577,7 +600,10 @@ void Controller::after(const kstone::Engine &e) {
     latched_=true; owner_fault_.set("driver_stale_feedback");
     clear_motion(); owner_generation_=generation_.fetch_add(1)+1; engine_->set_paused(true);
   }
-  bool safe=!latched_ && !e.paused() && e.written() && e.fresh() && !e.result().held && e.command().q.allFinite() && e.command().v.allFinite();
+  // A feedback group attached this cycle: earlier producer requests are void.
+  if (e.stats().attaches!=seen_attaches_) owner_generation_=generation_.fetch_add(1)+1;
+  seen_attaches_=e.stats().attaches;
+  bool safe=!latched_ && !e.paused() && e.written() && !e.result().held && e.command().q.allFinite() && e.command().v.allFinite();
   if (!latched_ && owner_fault_.bytes[0]==0 && !safe && !e.paused()) owner_fault_.set("held_or_stale");
   capture(safe);
 }
@@ -620,7 +646,7 @@ Eigen::Isometry3d Controller::port_pose(std::size_t mi,std::size_t pi) {
 }
 void Controller::capture(bool safe) {
   auto &s=snapshots_.write(); kstone::take_snapshot(*engine_,s.engine);
-  s.q=q_; s.accepted=accepted_values_; s.expired=expired_; s.safe=safe; s.joints_attached=!feedback_ || joints_synced_; s.base_attached=!feedback_ || base_synced_; s.stamp=now(); s.dt=engine_->dt(); s.generation=owner_generation_; s.fault=owner_fault_;
+  s.q=q_; s.accepted=accepted_values_; s.expired=expired_; s.safe=safe; s.joints_attached=!feedback_ || joints_synced(); s.base_attached=!feedback_ || base_synced(); s.stamp=now(); s.dt=engine_->dt(); s.generation=owner_generation_; s.fault=owner_fault_;
   s.outcomes=outcomes_; s.outcome_count=outcome_count_; s.base_velocity={};
   if(chassis_) s.chassis_pose=kstone::chassis_root_pose(chassis_->output().pose);
   s.engine.written=safe;
@@ -698,12 +724,11 @@ std::uint64_t Controller::feedback_base(const Eigen::Isometry3d &p,double age) {
   }
   base_candidate_stamp_=stamp; auto &s=base_input_.write(); s.value=v;s.receipt=stamp;s.sequence=++next_sequence_; base_input_.publish();return next_sequence_;
 }
-static bool recent(double stamp,double t,double timeout) { return stamp>=0 && t>=stamp && t-stamp<=timeout; }
-bool Controller::joints_fresh(double t) const {
-  for(std::size_t i=0;i<joints_.size();++i) if(required_[i] && !recent(stamps_[i],t,options_.feedback_timeout_s)) return false;
+bool Controller::joints_synced() const {
+  for (std::size_t g=0;g<joint_groups_.size();++g) if (joint_groups_[g] && !engine_->group_attached(g)) return false;
   return true;
 }
-bool Controller::base_fresh(double t) const { return recent(stamps_.back(),t,options_.feedback_timeout_s); }
+bool Controller::base_synced() const { return root_ && engine_->group_attached(base_group_); }
 Eigen::Isometry3d Controller::pose(const std::string &id,const std::string &name) const {
   const auto a=addresses_[input_index(id,name)]; const auto &p=port(id,name);
   if(p.type!=kstone::PortType::pose || p.frame.empty()) throw std::invalid_argument("pose target requires a frame");

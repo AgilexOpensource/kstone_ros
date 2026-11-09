@@ -96,8 +96,8 @@ Remapping is supported; `~/discover` reports resolved names, types, frames and Q
 Driver outputs are gated on real feedback, so a robot never jumps to a stale model target on connect:
 
 - Nothing is published on `~/feedback/joint_states` until fresh `~/joint_states` covers every unlocked joint; nothing on `~/feedback/cmd_vel` until fresh `~/odom` arrives (free root only).
-- On attach the measured state overwrites the model command and module targets are rebased to it; enabled modules stay enabled.
-- Joint and base gating are independent. When feedback goes stale (`feedback_timeout_s`) that output detaches: joint commands stop; `cmd_vel` sends zero for one `command_timeout_s`, then stops. Attach repeats on fresh feedback.
+- Attach takes `feedback_timeout_s` of continuously fresh feedback. Throughout that window the measured state overwrites the model command every cycle (the first cycle also rebases module targets to it), so the first published command starts from a current measurement; enabled modules stay enabled.
+- Joint and base gating are independent: the free root is its own engine feedback group `base` unless the YAML `feedback_groups` places it. When feedback goes stale (`feedback_timeout_s`) that output detaches: joint commands stop; `cmd_vel` sends zero for one `command_timeout_s`, then stops. Attach repeats on fresh feedback.
 - The engine keeps running without feedback; there is no dry-run mode. To test without hardware, feed `~/joint_states`/`~/odom` from a simulator (for example a MuJoCo sim package) or use the model package's RViz launch.
 
 ### Engine topics
@@ -169,9 +169,8 @@ Pass `params_file:=/absolute/path/bridge.yaml` for bridge settings not exposed a
 | `world_frame`, `base_frame` | `world`, `base_link`: world and model-root frames; chassis body frame is its YAML `base_frame` |
 | `publish_tf` | `false`; optionally publish world → model-root TF, requiring a free root and distinct frames |
 | `chassis_module` | Empty: automatic selection; if set, must name the root-owning chassis |
-| `command_timeout_s` | `0.5`; a command older than this (or than a shorter positive port timeout) when the engine applies it is rejected |
-| `feedback_timeout_s` | `0.25`; driver feedback freshness required to keep driver outputs attached |
-| `stamped_message_timeout_s` | `0.5`; reject stale/future nonzero ROS stamps; zero stamps use reception time |
+| `command_timeout_s` | `0.5`; a command older than this (or than a shorter positive port timeout) when the engine applies it is rejected; also rejects stale/future nonzero command stamps |
+| `feedback_timeout_s` | `0.25`; driver feedback freshness required to keep driver outputs attached; also rejects stale/future nonzero feedback stamps and bounds chassis odometry age. Zero stamps use reception time |
 | `state_rate_hz` | `10`; rate of the state topic. Feedback poses, driver commands (`feedback/joint_states`, `feedback/cmd_vel`) and TF follow the engine rate |
 | `debug_port`, `debug_host`, `debug_token` | `0` (off), `127.0.0.1`, empty; start a kstone DebugServer for `kstone-viewer`. A non-loopback host requires a token; an empty token falls back to `$KSTONE_TOKEN`. Launch `debug_port:=7311` overrides the params file. Viewer motion edits yield to ROS commands on the same port |
 | Driver topic overrides | `feedback_joint_topic`, `feedback_base_topic`, `joint_command_topic`, `base_command_topic`; see bridge defaults. Nonempty `feedback_base_topic` enables additional root `PoseStamped` sensing |
