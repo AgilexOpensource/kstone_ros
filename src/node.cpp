@@ -178,7 +178,12 @@ public:
     }
     subscribe<Joints>(topic("control/joint"),[this](const Joints &m) {
       joint_target_header(m.header);
-      core_->joint_targets(m.name,m.position);
+      std::vector<std::string> ignored;
+      core_->joint_targets(m.name,m.position,&ignored);
+      if(!ignored.empty()) {
+        std::string list; for(const auto &n:ignored) list+=(list.empty()?"":", ")+n;
+        warn(topic("control/joint")+" ignored","joints outside every joint_target chain: "+list);
+      }
     },rclcpp::QoS(10),kstone_ros::Node::map({
       {"semantics","target"},
       {"routing","by_joint_name"},{"module_routes",routes}}));
@@ -465,10 +470,10 @@ private:
       RCLCPP_WARN(get_logger(), "%s: %s", key.c_str(), message.c_str());
     }
   }
+  // Only planar x, y and yaw are read; the SDK drops y on a differential chassis.
   void twist_input(const std::string &id,const Twist &m) {
-    for (double x : {m.linear.z,m.angular.x,m.angular.y})
-      if (!std::isfinite(x) || std::abs(x)>1e-9) throw std::invalid_argument("twist supports planar x, y and yaw only");
     kstone::PortValue value; value.vector=Eigen::Vector3d(m.linear.x,m.linear.y,m.angular.z);
+    if (!within_bounds(core_->port(id,"velocity"),value)) warn(id+"/control/cmd_vel limited","exceeds velocity bounds; limited by the chassis");
     core_->write(id,"velocity",value);
   }
   // Commands follow the engine rate; a runtime rate change reschedules on the next tick.

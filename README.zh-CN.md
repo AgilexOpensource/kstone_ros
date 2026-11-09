@@ -113,12 +113,12 @@ ros2 topic pub -r 10 /kstone/chassis/control/cmd_vel \
 |---|---|---|
 | `~/M/feedback/pose` | 输出 OUTPUT `PoseStamped` | frame task 当前 FK 或底盘控制中心估计，**不是目标** |
 | `~/M/control/pose` | 输入 INPUT `PoseStamped` | `frame_target` 目标；**仅全向底盘**提供平面位姿目标 |
-| `~/M/control/cmd_vel` | 输入 INPUT `Twist` | 全向/差速底盘的机体坐标系速度 |
+| `~/M/control/cmd_vel` | 输入 INPUT `Twist` | 全向/差速底盘的机体坐标系速度；超速由底盘限幅，并节流打印警告 |
 
 关节目标使用任意顺序的 `name`/`position`，frame ID 须为空，忽略 velocity/effort。
-可只发任意子集关节，未提及的关节保持所属模块的当前目标。不属于任何 joint_target 关节链的名称会被忽略，数值按模块限位裁剪。名称重复、名称与位置数量不符、非有限值或归属有歧义时整条原子拒绝，同一模块以最后接受的目标为准。
+可只发任意子集关节，未提及的关节保持所属模块的当前目标。不属于任何 joint_target 关节链的名称会被忽略并节流打印警告，数值按模块限位裁剪。名称重复、名称与位置数量不符、非有限值或归属有歧义时整条原子拒绝，同一模块以最后接受的目标为准。
 位姿反馈来自当前实测/估计快照；frame_target 使用配置的参考坐标系，底盘位姿目标/反馈使用 `world_frame`。
-Twist 仅接受平面 x/y/yaw；差速底盘横向速度须为零。
+Twist 只使用平面 x/y/yaw；其余轴忽略，差速底盘也忽略 `linear.y`。
 
 ### 服务
 

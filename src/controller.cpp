@@ -310,11 +310,17 @@ void validate_port(const kstone::PortInfo &i, const kstone::PortValue &v) {
                             : v.vector;
     if (a.size() != i.size() || !a.allFinite())
       throw std::invalid_argument("port requires matching finite numbers");
-    if (i.lower.size() && (a.array() < i.lower.array()).any())
-      throw std::invalid_argument("port value exceeds lower bounds");
-    if (i.upper.size() && (a.array() > i.upper.array()).any())
-      throw std::invalid_argument("port value exceeds upper bounds");
   }
+}
+bool within_bounds(const kstone::PortInfo &i, const kstone::PortValue &v) {
+  if (i.type != kstone::PortType::number && i.type != kstone::PortType::vector) return true;
+  Eigen::VectorXd a = i.type == kstone::PortType::number ? Eigen::VectorXd::Constant(1, v.number) : v.vector;
+  if (a.size() != i.size()) return false;
+  for (Eigen::Index k = 0; k < a.size(); ++k) {
+    if (i.lower.size() && i.upper.size() && i.lower[k] == i.upper[k]) continue;
+    if ((i.lower.size() && a[k] < i.lower[k]) || (i.upper.size() && a[k] > i.upper[k])) return false;
+  }
+  return true;
 }
 
 Controller::~Controller() { stop(); }
@@ -673,13 +679,13 @@ bool Controller::poll() {
   written=s.safe && lifecycle_==1 && now()-s.stamp<=scheduler_limit(s.dt) && now()>=s.stamp;
   return written;
 }
-std::uint64_t Controller::joint_targets(const std::vector<std::string> &names,const std::vector<double> &positions) {
+std::uint64_t Controller::joint_targets(const std::vector<std::string> &names,const std::vector<double> &positions,std::vector<std::string> *ignored) {
   const double receipt=now(); const auto generation=generation_.load();
   check_joint_input(names,positions);
   std::map<std::size_t,std::pair<std::vector<std::string>,std::vector<double>>> groups;
   for(std::size_t j=0;j<names.size();++j) {
     const auto route=joint_routes_.find(names[j]);
-    if(route==joint_routes_.end()) continue;  // Not in any joint_target chain: ignored.
+    if(route==joint_routes_.end()) { if(ignored) ignored->push_back(names[j]); continue; }
     if(ambiguous_joints_.count(names[j])) throw std::invalid_argument("ambiguous aggregate joint ownership");
     auto &group=groups[route->second.first]; group.first.push_back(names[j]); group.second.push_back(positions[j]);
   }

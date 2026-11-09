@@ -19,6 +19,8 @@ Node parse_json(const std::string &text);
 void require(kstone::Status status);
 void validate_port(const kstone::PortInfo &info,
                    const kstone::PortValue &value);
+// Out-of-bounds values are accepted; the owning module limits them. Fixed axes (lower == upper) are not checked.
+bool within_bounds(const kstone::PortInfo &info, const kstone::PortValue &value);
 template <class T> T take(kstone::Result<T> result) {
   if (!result)
     throw std::runtime_error(result.error().message);
@@ -99,7 +101,8 @@ public:
   std::uint64_t reset_target(const std::string &);
   std::uint64_t reset_home();
   std::uint64_t recover();
-  std::uint64_t joint_targets(const std::vector<std::string> &, const std::vector<double> &);
+  // Names outside every joint_target chain are skipped and, if given, appended to ignored.
+  std::uint64_t joint_targets(const std::vector<std::string> &, const std::vector<double> &, std::vector<std::string> *ignored = nullptr);
   std::uint64_t feedback_joints(const std::vector<std::string> &, const std::vector<double> &, double age_s = 0);
   std::uint64_t feedback_base(const Eigen::Isometry3d &, double age_s = 0);
   double dt() const { return snapshot().dt; }

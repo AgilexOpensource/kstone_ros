@@ -189,12 +189,19 @@ int main() {
       p.upper = Eigen::VectorXd::Constant(1, 1);
       v.number = 0.5;
       validate_port(p, v);
+      check(within_bounds(p, v), "inside bounds");
       v.number = NAN;
       rejects([&] { validate_port(p, v); });
       v.number = 2;
-      rejects([&] { validate_port(p, v); });
+      validate_port(p, v);
+      check(!within_bounds(p, v), "above upper bound");
       v.number = -2;
-      rejects([&] { validate_port(p, v); });
+      validate_port(p, v);
+      check(!within_bounds(p, v), "below lower bound");
+      p.lower = p.upper = Eigen::VectorXd::Zero(1);
+      check(within_bounds(p, v), "fixed axis is not checked");
+      p.lower = Eigen::VectorXd::Constant(1, -1);
+      p.upper = Eigen::VectorXd::Constant(1, 1);
       p.type = kstone::PortType::flag;
       v.flag = true;
       validate_port(p, v);
@@ -238,8 +245,10 @@ int main() {
     test("vector bounds sizes finite and target hold", [] {
       Fixture f;
       Controller c(KSTONE_TEST_CONFIG, f.options());
+      c.write("gripper_joint", "target", vector({0.5}));
+      for (int i = 0; i < 5; ++i) { f.advance(); cycle(c); }
+      check(enabled(c, "gripper_joint"), "out-of-bounds target is passed to the module, which limits it");
       c.write("gripper_joint", "target", vector({0.01}));
-      rejects([&] { c.write("gripper_joint", "target", vector({0.5})); });
       rejects([&] { c.write("gripper_joint", "target", vector({NAN})); });
       rejects([&] { c.write("gripper_joint", "target", vector({0, 0})); });
       for (int i = 0; i < 30; ++i) {
@@ -347,7 +356,9 @@ int main() {
       check(c.read("axes","target").vector.isApprox(vector({0.08,0.1}).vector),"untouched subset changed");
       c.joint_targets({"unknown",""},{0.0,0.0});f.advance();cycle(c);
       check(c.read("hand","target").vector.isApprox(vector({0.03,0.07}).vector),"all-unknown message changed target");
-      c.joint_targets({"finger_joint","slide_x","unknown"},{0.01,0.05,0});f.advance();cycle(c);
+      std::vector<std::string> ignored;
+      c.joint_targets({"finger_joint","slide_x","unknown"},{0.01,0.05,0},&ignored);f.advance();cycle(c);
+      check(ignored==std::vector<std::string>{"unknown"},"ignored joint names not reported");
       check(c.read("hand","target").vector.isApprox(vector({0.01,0.05}).vector),"unknown name blocked the message");
       c.joint_targets({"slide_y","slide_z"},{0.06,100});f.advance();cycle(c);
       check(c.read("axes","target").vector[0]==0.06 && c.read("axes","target").vector[1]<100,"out-of-bounds not clamped");

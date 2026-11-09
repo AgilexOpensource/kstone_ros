@@ -114,12 +114,12 @@ Driver outputs are gated on real feedback, so a robot never jumps to a stale mod
 |---|---|---|
 | `~/M/feedback/pose` | OUTPUT `PoseStamped` | Current frame-task FK or chassis control-center estimate, **not the target** |
 | `~/M/control/pose` | INPUT `PoseStamped` | `frame_target` target; **omni-only** chassis planar pose target |
-| `~/M/control/cmd_vel` | INPUT `Twist` | Omni/differential chassis body-frame velocity |
+| `~/M/control/cmd_vel` | INPUT `Twist` | Omni/differential chassis body-frame velocity; overspeed is limited by the chassis with a throttled warning |
 
 Joint targets use `name`/`position` in any order; frame IDs must be empty and velocity/effort are ignored.
-Any subset of joints is accepted, and omitted joints keep their module's current target. Names outside every joint_target chain are ignored, and values are clamped to the module's limits. Duplicate names, a name/position count mismatch, non-finite values or ambiguous ownership reject the whole message atomically, and the latest accepted target wins per module.
+Any subset of joints is accepted, and omitted joints keep their module's current target. Names outside every joint_target chain are ignored with a throttled warning, and values are clamped to the module's limits. Duplicate names, a name/position count mismatch, non-finite values or ambiguous ownership reject the whole message atomically, and the latest accepted target wins per module.
 Pose feedback comes from current measured/estimated snapshots. Frame targets use their configured reference; chassis pose targets/feedback use `world_frame`.
-Twist accepts only planar x/y/yaw, with zero lateral velocity for differential chassis.
+Twist uses only planar x/y/yaw; other axes, and `linear.y` on a differential chassis, are ignored.
 
 ### Services
 

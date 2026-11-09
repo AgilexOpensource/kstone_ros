@@ -935,31 +935,29 @@ def test_module_cmd_vel_bare_type_validation_and_receipt_lease(start_node, probe
     assert_no_legacy_driver_topics(bridge, metadata, probe)
     submitted = states[-1]["submitted_inputs"]
     invalid = []
-    for part, axis in (("linear", "x"), ("linear", "y"), ("linear", "z"),
-                       ("angular", "x"), ("angular", "y"), ("angular", "z")):
+    for part, axis in (("linear", "x"), ("linear", "y"), ("angular", "z")):
         for value in (float("nan"), float("inf")):
             message = Twist()
             setattr(getattr(message, part), axis, value)
             invalid.append(message)
-    for part, axis in (("linear", "z"), ("angular", "x"), ("angular", "y")):
-        message = Twist()
-        setattr(getattr(message, part), axis, 0.01)
-        invalid.append(message)
-    if kinematics == "differential":
-        message = Twist(); message.linear.y = 0.01
-        invalid.append(message)
     for message in invalid:
         publisher.publish(message)
         probe.spin_for(bridge, 0.015)
     probe.spin_for(bridge, 0.1)
     assert states[-1]["submitted_inputs"] == submitted
     assert "mobile_platform" not in states[-1]["expired_modules"]
-    command = Twist(); command.linear.x = 0.05
+    # Unused axes, and lateral velocity on a differential chassis, are ignored.
+    command = Twist(); command.linear.x = 0.05; command.linear.z = 1.0
+    command.angular.x = float("nan"); command.angular.y = 0.3
+    if kinematics == "differential":
+        command.linear.y = 0.2
     def moving():
         publisher.publish(command)
         return controls[-1].linear.x > 0.005 and states[-1]["submitted_inputs"] > submitted
     probe.wait(bridge, moving)
     probe.spin_for(bridge, 0.05)
+    if kinematics == "differential":
+        assert controls[-1].linear.y == 0
     accepted = states[-1]["submitted_inputs"]
     # Rejected messages cannot keep motion alive past the port velocity timeout.
     deadline = time.monotonic() + 0.45
@@ -970,3 +968,11 @@ def test_module_cmd_vel_bare_type_validation_and_receipt_lease(start_node, probe
     assert states[-1]["submitted_inputs"] == accepted
     assert states[-1]["modules"]["mobile_platform"]["enabled"]
     driver_twist(controls[-1])
+    # Overspeed is limited by the chassis rather than rejected.
+    command = Twist(); command.linear.x = 5.0; command.angular.z = -10.0
+    def saturated():
+        publisher.publish(command)
+        return controls[-1].linear.x > 0.29 and controls[-1].angular.z < -0.79
+    probe.wait(bridge, saturated)
+    assert controls[-1].linear.x <= 0.3 + 1e-9 and controls[-1].angular.z >= -0.8 - 1e-9
+    assert states[-1]["modules"]["mobile_platform"]["enabled"]
