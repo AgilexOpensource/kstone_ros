@@ -13,8 +13,17 @@ model:
         torso_joint2: 0.2618
         l_arm_joint4: 0.0873  # a fully stretched elbow can fold outward and get stuck
         r_arm_joint4: 0.0873
+        l_arm_joint1: -2.007  # j1/j2/j3: measured convergence values
+        r_arm_joint1: -0.921
+        l_arm_joint2: 0.260
+        r_arm_joint2: 0.260
+        l_arm_joint3: -2.090
+        r_arm_joint3: -0.649
       upper:
-        torso_joint2: 2.2
+        l_arm_joint1: 0.921
+        r_arm_joint1: 2.007
+        l_arm_joint3: 0.649
+        r_arm_joint3: 2.090
 rate_hz: 50
 feedback_timeout_s: 0.25
 realtime: true
@@ -74,7 +83,7 @@ modules:
     # period_s: 0.02  # engine dt replaces it
   torso_pose:
     type: frame_target
-    frame: torso_link4
+    frame: chest_link
     joints: [torso_joint1, torso_joint2, torso_joint3, torso_joint4]
     reference: chassis_base_link
     # weight: 5
@@ -82,7 +91,7 @@ modules:
     position_weight: [5, 0, 5]
     orientation_weight: [1, 1, 1]
     world_axes: true
-    lm_damping: 1.5
+    lm_damping: 0.1
     position_tolerance: 0.001
     orientation_tolerance: 0.01
     task: {level: 0}
@@ -99,7 +108,7 @@ modules:
     reference: chassis_base_link
     weight: 5
     orientation_weight: [0.2, 0.2, 0.2]
-    lm_damping: 1.5
+    lm_damping: 0.1
     task: {level: 1}
     home_motion: {velocity_scale: 0.1, timeout_s: 2.0}
     trajectory:
@@ -115,7 +124,7 @@ modules:
     reference: chassis_base_link
     weight: 5
     orientation_weight: [0.2, 0.2, 0.2]
-    lm_damping: 1.5
+    lm_damping: 0.1
     task: {level: 1}
     home_motion: {velocity_scale: 0.1, timeout_s: 2.0}
     trajectory:
@@ -185,7 +194,7 @@ modules:
     frame: head_link2
     joints: [head_joint1, head_joint2]
     frames: [left_base_link, right_base_link]
-    max_velocity: 3.0
+    max_velocity: 1.5
     target_idle_s: 5.0
   com:
     type: center_of_mass

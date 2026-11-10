@@ -149,6 +149,7 @@ Controller::Controller(const std::string &file, Options options)
       if (auto initial = configured->find("initial"))
         robot.set("initial", *initial);
     bootstrap.set("robot", robot);
+    bootstrap.set("modules", Node::map());
     auto initial_engine =
         take(kstone::build_engine(bootstrap, path.parent_path(), {}, context_));
     feedback_ = std::make_shared<FeedbackRobot>();
