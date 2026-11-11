@@ -191,7 +191,7 @@ modules:
     frames: [left_base_link, right_base_link]
     max_velocity: 1.5
     target_idle_s: 5.0
-  # waist is z-lift + yaw only, cannot shift the CoM in XY
+  # waist is z-lift + pitch only, cannot shift the CoM in XY
   # com:
   #   type: center_of_mass
   #   frame: chassis_base_link
