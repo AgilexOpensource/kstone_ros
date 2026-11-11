@@ -43,7 +43,7 @@ public:
           "topic_prefix, world_frame and base_frame must be nonempty");
     options.command_timeout_s = parameter<double>("command_timeout_s", 0.5);
     options.feedback_timeout_s = parameter<double>("feedback_timeout_s", 0.25);
-    state_rate_ = parameter<double>("state_rate_hz", 10.0);
+    state_rate_ = parameter<double>("state_rate_hz", 30.0);
     options.chassis_module = parameter<std::string>("chassis_module", "");
     const auto feedback_joint =
         parameter<std::string>("feedback_joint_topic", topic("joint_states"));
@@ -537,7 +537,7 @@ private:
   kstone_ros::Node discovery_, interfaces_{kstone_ros::Node::list()};
   std::unique_ptr<Controller> core_;
   std::string prefix_, world_, base_;
-  double command_timeout_{0.5}, feedback_timeout_{0.25}, state_rate_{10}, timer_dt_{0};
+  double command_timeout_{0.5}, feedback_timeout_{0.25}, state_rate_{30}, timer_dt_{0};
   std::optional<double> next_state_, base_zero_until_;
   double base_hold_{0.5};
   std::map<std::string, double> warnings_;

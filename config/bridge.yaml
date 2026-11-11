@@ -6,7 +6,7 @@
     duration: 0.0
     command_timeout_s: 0.5
     feedback_timeout_s: 0.25
-    state_rate_hz: 10.0
+    state_rate_hz: 30.0
     # Driver command OUTPUTS; chassis bare Twist uses the chassis body frame.
     joint_command_topic: ~/feedback/joint_states
     base_command_topic: ~/feedback/cmd_vel

@@ -137,6 +137,38 @@ ros2 service call /kstone/tool_pose/home std_srvs/srv/Trigger "{}"
 ros2 service call /kstone/tool_pose/enable std_srvs/srv/SetBool "{data: false}"
 ```
 
+### state 字段
+
+`~/state` 是 JSON 对象（`schema_version` 为 `1`），按 `state_rate_hz` 发布：
+
+| 字段 | 含义 |
+|---|---|
+| `fresh` | 上一周期所有反馈组都在 `feedback_timeout_s` 内 |
+| `joints_attached`、`base_attached` | 关节 / 底盘驱动输出已接入（见驱动话题）；无自由根时 `base_attached` 为 `false` |
+| `written` | 本周期已写出安全命令，且快照未过期；为 `false` 时驱动输出不可信 |
+| `quality` | 求解质量：`nominal`，或 `degraded`（某阶段保持、不精确或步长被裁剪） |
+| `fault` | 空串表示无故障；否则为原因，如 `driver_stale_feedback`、`held_or_stale`、`cycle_error: ...`、`stopped`、`duration_complete` |
+| `expired_modules` | 因故障或反馈丢失被禁用、须新目标才能重新激活的运动模块 ID |
+| `modules.M` | `enabled`、`running`（本周期参与求解）、`held_by`（抢占该模块的模块 ID，否则 `null`）、`home_state`（不可回零为 `null`）、`ports`（当前已接受的输入）、`outputs`（模块输出） |
+| `outcomes` | 最近 32 条请求结果 `{request_id, applied, error}`，含服务和目标话题；`applied` 为 `false` 时 `error` 给出原因 |
+| `cycles`、`failed_cycles`、`engine_time` | 引擎周期数、失败周期数、逻辑时间（秒） |
+| `snapshot_stamp` | 快照时刻（秒，节点时钟） |
+| `generation` | 故障、恢复或重新接入时递增；之前代次的请求被丢弃 |
+| `lifecycle` | `0` 未启动、`1` 运行、`2` 线程异常退出、`3` 已停止 |
+| `rejected_requests`、`submitted_inputs` | 被拒绝的请求数（未运行或队列满）、已提交的话题输入数 |
+| `dropped_logs`、`truncated_logs` | 丢弃 / 截断的日志条数 |
+
+`home_state` 取值：`idle`、`waiting`（已入队）、`executing`、`succeeded`、`timed_out`（`timeout_s` 内无进展）、`aborted`（被禁用、周期跳过或重新同步）。终态保持到下一次回零请求。
+
+判断回零是否完成：
+
+1. 服务返回 `accepted request_id=N`。
+2. 在 `outcomes` 中找到 `request_id == N`：`applied` 为 `false` 表示请求被拒绝，看 `error`。
+3. 被接受后跟踪 `modules.M.home_state`：`waiting` → `executing` → `succeeded` 为成功，`timed_out` / `aborted` 为失败。
+
+`~/home` 只让持有控制权的模块回零，其他模块的 `home_state` 保留上一次的终态，只看本次进入过 `waiting` / `executing` 的模块。
+`outcomes` 只保留 32 条，目标话题持续发布会很快挤掉服务结果，回零前须停止目标发布器。
+
 ## 接入自己的模型
 
 从随包 YAML/URDF 开始，替换模型并配置模块、限位、频率及回零位置。
@@ -170,7 +202,7 @@ URDF 路径可相对 YAML。驱动发布新鲜的 `~/joint_states`（自由根�
 | `chassis_module` | 空：自动选择；指定时须为拥有模型根的底盘 |
 | `command_timeout_s` | `0.5`；引擎应用命令时，若命令已超过该时间（或更短的正值端口超时）则拒绝；也拒绝过期/未来的非零命令时间戳 |
 | `feedback_timeout_s` | `0.25`；保持驱动输出接入所需的驱动反馈新鲜度；也拒绝过期/未来的非零反馈时间戳，并限定底盘里程计时效。零时间戳按接收时间处理 |
-| `state_rate_hz` | `10`；state 话题的频率。feedback pose、驱动命令（`feedback/joint_states`、`feedback/cmd_vel`）和 TF 跟随引擎频率 |
+| `state_rate_hz` | `30`；state 话题的频率。feedback pose、驱动命令（`feedback/joint_states`、`feedback/cmd_vel`）和 TF 跟随引擎频率 |
 | `debug_port`、`debug_host`、`debug_token` | `0`（关闭）、`127.0.0.1`、空；启动 kstone DebugServer 供 `kstone-viewer` 连接。非回环地址必须设置 token；token 为空时读取 `$KSTONE_TOKEN`。launch 参数 `debug_port:=7311` 可覆盖参数文件。同一端口上 ROS 命令优先于 viewer 的运动编辑 |
 | 驱动话题覆盖 | `feedback_joint_topic`、`feedback_base_topic`、`joint_command_topic`、`base_command_topic`，见默认配置；非空 `feedback_base_topic` 启用额外的模型根 `PoseStamped` 感知 |
 

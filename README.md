@@ -138,6 +138,38 @@ ros2 service call /kstone/tool_pose/home std_srvs/srv/Trigger "{}"
 ros2 service call /kstone/tool_pose/enable std_srvs/srv/SetBool "{data: false}"
 ```
 
+### State fields
+
+`~/state` is a JSON object (`schema_version` `1`) published at `state_rate_hz`:
+
+| Field | Meaning |
+|---|---|
+| `fresh` | Every feedback group was within `feedback_timeout_s` in the last cycle |
+| `joints_attached`, `base_attached` | Joint / chassis driver output is attached (see driver topics); `base_attached` is `false` without a free root |
+| `written` | A safe command was written this cycle and the snapshot is not stale; when `false`, driver output is not trustworthy |
+| `quality` | Solve quality: `nominal`, or `degraded` (a stage held or inexact, or the step clipped) |
+| `fault` | Empty when healthy; otherwise the reason, e.g. `driver_stale_feedback`, `held_or_stale`, `cycle_error: ...`, `stopped`, `duration_complete` |
+| `expired_modules` | Motion module IDs disabled by a fault or feedback loss that need a new target to reactivate |
+| `modules.M` | `enabled`, `running` (in this cycle's solve), `held_by` (ID of the preempting module, else `null`), `home_state` (`null` if not homeable), `ports` (current accepted inputs), `outputs` (module outputs) |
+| `outcomes` | Last 32 request results `{request_id, applied, error}`, from services and target topics; when `applied` is `false`, `error` gives the reason |
+| `cycles`, `failed_cycles`, `engine_time` | Engine cycle count, failed cycles, logical time (s) |
+| `snapshot_stamp` | Snapshot time (s, node clock) |
+| `generation` | Increments on fault, recovery or reattach; requests from an older generation are discarded |
+| `lifecycle` | `0` not started, `1` running, `2` thread exited with an error, `3` stopped |
+| `rejected_requests`, `submitted_inputs` | Rejected requests (not running or queue full), submitted topic inputs |
+| `dropped_logs`, `truncated_logs` | Dropped / truncated log entries |
+
+`home_state` values: `idle`, `waiting` (queued), `executing`, `succeeded`, `timed_out` (no progress within `timeout_s`), `aborted` (disabled, skipped cycle or resync). A terminal state persists until the next home request.
+
+To check whether homing finished:
+
+1. The service returns `accepted request_id=N`.
+2. Find `request_id == N` in `outcomes`: `applied` `false` means the request was rejected; see `error`.
+3. Once applied, follow `modules.M.home_state`: `waiting` → `executing` → `succeeded` is success; `timed_out` / `aborted` is failure.
+
+`~/home` homes only modules in control; other modules keep their previous terminal `home_state`, so watch only modules that passed through `waiting` / `executing` this time.
+`outcomes` keeps only 32 entries, and a continuous target stream quickly pushes out service results, so stop target publishers before homing.
+
 ## Use your own model
 
 Start from the shipped YAML/URDF, replace the model and configure modules, limits, rate and home positions.
@@ -171,7 +203,7 @@ Pass `params_file:=/absolute/path/bridge.yaml` for bridge settings not exposed a
 | `chassis_module` | Empty: automatic selection; if set, must name the root-owning chassis |
 | `command_timeout_s` | `0.5`; a command older than this (or than a shorter positive port timeout) when the engine applies it is rejected; also rejects stale/future nonzero command stamps |
 | `feedback_timeout_s` | `0.25`; driver feedback freshness required to keep driver outputs attached; also rejects stale/future nonzero feedback stamps and bounds chassis odometry age. Zero stamps use reception time |
-| `state_rate_hz` | `10`; rate of the state topic. Feedback poses, driver commands (`feedback/joint_states`, `feedback/cmd_vel`) and TF follow the engine rate |
+| `state_rate_hz` | `30`; rate of the state topic. Feedback poses, driver commands (`feedback/joint_states`, `feedback/cmd_vel`) and TF follow the engine rate |
 | `debug_port`, `debug_host`, `debug_token` | `0` (off), `127.0.0.1`, empty; start a kstone DebugServer for `kstone-viewer`. A non-loopback host requires a token; an empty token falls back to `$KSTONE_TOKEN`. Launch `debug_port:=7311` overrides the params file. Viewer motion edits yield to ROS commands on the same port |
 | Driver topic overrides | `feedback_joint_topic`, `feedback_base_topic`, `joint_command_topic`, `base_command_topic`; see bridge defaults. Nonempty `feedback_base_topic` enables additional root `PoseStamped` sensing |
 
