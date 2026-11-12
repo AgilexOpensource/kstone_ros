@@ -136,21 +136,21 @@ modules:
   left_arm_null:
     type: null_space
     primary: left_arm_pose
-    # preference: manipulability
-    # manipulability_rate: 1.0
-    # task: {level: 1}
+    preference: manipulability
+    manipulability_rate: 1.0
+    task: {level: 1}
     reference: initial
     posture_weight: 0.05
-    manipulability_weight: 0.05
+    manipulability_weight: 0.1
   right_arm_null:
     type: null_space
     primary: right_arm_pose
-    # preference: manipulability
-    # manipulability_rate: 1.0
-    # task: {level: 1}
+    preference: manipulability
+    manipulability_rate: 1.0
+    task: {level: 1}
     reference: initial
     posture_weight: 0.05
-    manipulability_weight: 0.05
+    manipulability_weight: 0.1
   torso_joint:
     type: joint_target
     joints: [torso_joint1, torso_joint2, torso_joint3, torso_joint4]
