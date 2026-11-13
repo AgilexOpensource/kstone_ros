@@ -715,7 +715,7 @@ std::uint64_t Controller::feedback_joints(const std::vector<std::string> &names,
     ++idx;
   }
   if(!known) throw std::invalid_argument("feedback contains no supported model joints");
-  require(model_->check_position_limits(candidate.q)); candidate.sequence=++next_sequence_;
+  candidate.sequence=++next_sequence_;
   joint_candidate_=candidate; joint_input_.write()=candidate; joint_input_.publish(); return candidate.sequence;
 }
 std::uint64_t Controller::feedback_base(const Eigen::Isometry3d &p,double age) {
