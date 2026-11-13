@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.8)
 project(kstone_ros)
 
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 find_package(ament_cmake REQUIRED)
 find_package(kstone CONFIG REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
