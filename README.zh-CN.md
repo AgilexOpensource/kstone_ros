@@ -88,7 +88,7 @@ ros2 topic pub -r 10 /kstone/chassis/control/cmd_vel \
 | 端点 | 方向 / 类型 | 用途 |
 |---|---|---|
 | `~/joint_states` | 输入 INPUT `JointState` | 驱动的真机关节反馈；所有未锁定关节须持续新鲜才会开启关节输出 |
-| `~/odom` | 输入 INPUT `Odometry` | 驱动的真机世界/模型根里程计，仅自由根时订阅；须持续新鲜才会开启 `cmd_vel` 输出 |
+| `~/odom` | 输入 INPUT `Odometry` | 驱动的真机世界/模型根里程计（或控制中心位姿，见 `center_frame`），仅自由根时订阅；须持续新鲜才会开启 `cmd_vel` 输出 |
 | `~/feedback/joint_states` | 输出 OUTPUT `JointState` | 按模型（URDF 树）顺序的关节位置命令，**不是实测反馈**；关节反馈同步前及不安全时不发布 |
 | `~/feedback/cmd_vel` | 输出 OUTPUT `Twist` | 底盘机体坐标系命令；里程计同步前不发布；不安全、停止或完成时为零 |
 
@@ -198,6 +198,8 @@ URDF 路径可相对 YAML。驱动发布新鲜的 `~/joint_states`（自由根�
 | `duration` | `0` 运行到关闭；正的有限秒数限制引擎**逻辑时间**，含暂停/失败周期。完成后保留遥测、停止命令，再次运行须重启 |
 | `topic_prefix`, `namespace` | `~`；launch 命名空间为空 |
 | `world_frame`, `base_frame` | `world`、`base_link`：世界和模型根坐标系；底盘机体坐标系来自 YAML 的 `base_frame` |
+| `frame_prefix` | 空：加在 kstone 发布或要求的所有坐标系名前（world、base、端口参考系、底盘），与 `robot_state_publisher` 的 `frame_prefix` 对应 |
+| `center_frame` | 空：设置后，`child_frame_id` 等于它的 `~/odom` 视为底盘控制中心位姿（套用 YAML 的 `center_in_root`），底盘驱动通常这样上报；`base_frame` 子坐标系仍是根位姿 |
 | `publish_tf` | `false`；可选发布世界 → 模型根 TF，要求自由根且两个坐标系不同 |
 | `chassis_module` | 空：自动选择；指定时须为拥有模型根的底盘 |
 | `command_timeout_s` | `0.5`；引擎应用命令时，若命令已超过该时间（或更短的正值端口超时）则拒绝；也拒绝过期/未来的非零命令时间戳 |

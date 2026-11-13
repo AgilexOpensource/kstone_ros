@@ -105,6 +105,8 @@ public:
   std::uint64_t joint_targets(const std::vector<std::string> &, const std::vector<double> &, std::vector<std::string> *ignored = nullptr);
   std::uint64_t feedback_joints(const std::vector<std::string> &, const std::vector<double> &, double age_s = 0);
   std::uint64_t feedback_base(const Eigen::Isometry3d &, double age_s = 0);
+  // Chassis control-center pose (center_in_root applied), as chassis drivers report odometry.
+  std::uint64_t feedback_center(const Eigen::Isometry3d &, double age_s = 0);
   double dt() const { return snapshot().dt; }
   double now() const;
   const auto &chassis() const { return chassis_id_; }

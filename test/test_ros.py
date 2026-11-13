@@ -441,6 +441,18 @@ def test_private_namespaces_resolved_discovery_and_chassis(start_node, probe):
     driver_twist(controls[-1])
 
 
+def test_frame_prefix_applies_to_every_ros_frame(start_node, probe):
+    bridge = start_node(frame_prefix="r1/")
+    discovery = probe.subscribe_json(bridge.topic("discover"), LATCHED)
+    probe.wait(bridge, lambda: discovery)
+    assert (discovery[-1]["world_frame"], discovery[-1]["base_frame"]) == ("r1/world", "r1/base_link")
+    tool = next(m for m in discovery[-1]["modules"] if m["id"] == "tool_pose")
+    port = next(p for p in tool["ports"] if p["name"] == "target")
+    assert port["ros_frame"] == port["home_frame"] == "r1/base_link"
+    twist = bridge.topic("chassis/control/cmd_vel")
+    assert next(i for i in discovery[-1]["interfaces"] if i.get("topic") == twist)["frame"] == "r1/base_link"
+
+
 def test_progress_and_expiry_between_slow_ros_snapshot_consumptions(start_node, probe):
     bridge = start_node(state_rate_hz=0.5, command_timeout_s=0.1)
     states = probe.subscribe_json(bridge.topic("state"))
@@ -476,6 +488,30 @@ def test_canonical_odometry_and_joint_feedback_route_to_integrated_chassis(start
     probe.wait(bridge, lambda: states[-1]["joints_attached"] and states[-1]["base_attached"]
                and bases[-1].pose.position.x == pytest.approx(1.0))
     probe.wait(bridge, lambda: not states[-1]["joints_attached"] and not states[-1]["base_attached"])
+    assert not states[-1]["fault"]
+
+
+def test_center_frame_odometry_maps_to_root(start_node, probe, tmp_path):
+    path = config_variant(tmp_path)
+    config = yaml.safe_load(path.read_text())
+    config["modules"]["chassis"]["center_in_root"] = {"position": [0.0, 0.0, -0.2]}
+    path.write_text(yaml.safe_dump(config))
+    bridge = start_node(config_file=str(path), frame_prefix="r/", center_frame="base_footprint")
+    states = probe.subscribe_json(bridge.topic("state"))
+    bases = subscribe(probe, bridge, PoseStamped, "chassis/feedback/pose")
+    joints = probe.node.create_publisher(JointState, bridge.topic("joint_states"), 10)
+    odom = probe.node.create_publisher(Odometry, bridge.topic("odom"), 10)
+    probe.wait(bridge, lambda: states and joints.get_subscription_count() and odom.get_subscription_count())
+    message = Odometry()
+    message.header.frame_id = "r/world"
+    message.child_frame_id = "r/base_footprint"  # Ground control center, z = 0.
+    message.pose.pose.position.x = 1.0
+    message.pose.pose.orientation.w = 1.0
+    def attached():
+        joints.publish(JointState(name=JOINT_NAMES, position=INITIAL_POSITIONS))
+        odom.publish(message)
+        return states[-1]["base_attached"] and bases and bases[-1].pose.position.x == pytest.approx(1.0)
+    probe.wait(bridge, attached)
     assert not states[-1]["fault"]
 
 

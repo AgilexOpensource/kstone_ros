@@ -36,11 +36,15 @@ public:
       options.realtime = realtime.as_bool();
     while (!prefix_.empty() && prefix_.back() == '/')
       prefix_.pop_back();
+    frame_prefix_ = parameter<std::string>("frame_prefix", "");
     world_ = parameter<std::string>("world_frame", "world");
     base_ = parameter<std::string>("base_frame", "base_link");
     if (prefix_.empty() || world_.empty() || base_.empty())
       throw std::invalid_argument(
           "topic_prefix, world_frame and base_frame must be nonempty");
+    world_ = frame_prefix_ + world_; base_ = frame_prefix_ + base_;
+    center_ = parameter<std::string>("center_frame", "");
+    if (!center_.empty()) center_ = frame_prefix_ + center_;
     options.command_timeout_s = parameter<double>("command_timeout_s", 0.5);
     options.feedback_timeout_s = parameter<double>("feedback_timeout_s", 0.25);
     state_rate_ = parameter<double>("state_rate_hz", 30.0);
@@ -84,7 +88,7 @@ public:
     core_ = std::make_unique<Controller>(config, options);
     chassis_frame_ = base_;
     for (const auto &m : core_->modules())
-      if (m->id() == core_->chassis()) chassis_frame_ = m->chassis_frame;
+      if (m->id() == core_->chassis()) chassis_frame_ = frame_prefix_ + m->chassis_frame;
     auto latched = rclcpp::QoS(1).reliable().transient_local();
     state_pub_ = publisher<String>(topic("state"), latched);
     discovery_pub_ = publisher<String>(topic("discover"), latched);
@@ -110,9 +114,11 @@ public:
             rclcpp::SensorDataQoS());
       if (core_->has_root())
         subscribe<nav_msgs::msg::Odometry>(topic("odom"), [this](const nav_msgs::msg::Odometry &msg) {
-          if (!msg.child_frame_id.empty() && msg.child_frame_id != base_) throw std::invalid_argument("unexpected odometry child frame");
+          const bool center = !center_.empty() && msg.child_frame_id == center_;
+          if (!center && !msg.child_frame_id.empty() && msg.child_frame_id != base_) throw std::invalid_argument("unexpected odometry child frame");
           Pose p; p.header=msg.header; p.pose=msg.pose.pose;
-          core_->feedback_base(pose_input(p, world_, false), feedback_age(p.header));
+          const auto pose = pose_input(p, world_, false); const double a = feedback_age(p.header);
+          if (center) core_->feedback_center(pose, a); else core_->feedback_base(pose, a);
         }, rclcpp::SensorDataQoS());
       if (!feedback_base.empty() && core_->has_root())
         subscribe<Pose>(
@@ -148,8 +154,8 @@ public:
       } else if (m->type() == "chassis") {
         const auto endpoint=topic(id+"/control/cmd_vel");
         subscribe<Twist>(endpoint,[this,id](const Twist &msg) { twist_input(id,msg); }, rclcpp::QoS(10),
-                         kstone_ros::Node::map({{"frame",m->chassis_frame}}));
-        module_interface(id,endpoint,"subscribe","command","velocity",m->chassis_frame);
+                         kstone_ros::Node::map({{"frame",frame_prefix_+m->chassis_frame}}));
+        module_interface(id,endpoint,"subscribe","command","velocity",frame_prefix_+m->chassis_frame);
         if(m->chassis_omni) {
           const auto pose_endpoint=topic(id+"/control/pose");
           subscribe<Pose>(pose_endpoint,[this,id](const Pose &msg) {
@@ -363,7 +369,7 @@ private:
   }
   std::string port_frame(const std::string &id, const std::string &name) const {
     const auto &p = core_->port(id, name);
-    return p.reference.empty() ? world_ : p.reference;
+    return p.reference.empty() ? world_ : frame_prefix_ + p.reference;
   }
   double age(const std_msgs::msg::Header &header) {
     if (header.stamp.sec == 0 && header.stamp.nanosec == 0)
@@ -536,7 +542,7 @@ private:
   }
   kstone_ros::Node discovery_, interfaces_{kstone_ros::Node::list()};
   std::unique_ptr<Controller> core_;
-  std::string prefix_, world_, base_;
+  std::string prefix_, frame_prefix_, world_, base_, center_;
   double command_timeout_{0.5}, feedback_timeout_{0.25}, state_rate_{30}, timer_dt_{0};
   std::optional<double> next_state_, base_zero_until_;
   double base_hold_{0.5};

@@ -89,7 +89,7 @@ Remapping is supported; `~/discover` reports resolved names, types, frames and Q
 | Endpoint | Direction / type | Purpose |
 |---|---|---|
 | `~/joint_states` | INPUT `JointState` | Real joint feedback from the driver; every unlocked joint must stay fresh to enable joint output |
-| `~/odom` | INPUT `Odometry` | Real world/root odometry from the driver, subscribed only for a free root; must stay fresh to enable `cmd_vel` output |
+| `~/odom` | INPUT `Odometry` | Real world/root odometry from the driver (or control-center pose, see `center_frame`), subscribed only for a free root; must stay fresh to enable `cmd_vel` output |
 | `~/feedback/joint_states` | OUTPUT `JointState` | Joint position commands in model (URDF tree) order, **not measured feedback**; silent until joint feedback is synced, and when unsafe |
 | `~/feedback/cmd_vel` | OUTPUT `Twist` | Chassis body-frame command; silent until odometry is synced; zero when unsafe, stopped or completed |
 
@@ -199,6 +199,8 @@ Pass `params_file:=/absolute/path/bridge.yaml` for bridge settings not exposed a
 | `duration` | `0`: until shutdown; positive finite seconds limit engine **logical time**, including paused/failed cycles. Completion keeps telemetry, stops commands and requires restart for another run |
 | `topic_prefix`, `namespace` | `~`; empty launch namespace |
 | `world_frame`, `base_frame` | `world`, `base_link`: world and model-root frames; chassis body frame is its YAML `base_frame` |
+| `frame_prefix` | empty: prepended to every frame id kstone publishes or expects (world, base, port references, chassis), matching `robot_state_publisher` `frame_prefix` |
+| `center_frame` | empty: if set, `~/odom` with this `child_frame_id` is the chassis control-center pose (YAML `center_in_root` applied), as chassis drivers usually report; `base_frame` children stay root poses |
 | `publish_tf` | `false`; optionally publish world → model-root TF, requiring a free root and distinct frames |
 | `chassis_module` | Empty: automatic selection; if set, must name the root-owning chassis |
 | `command_timeout_s` | `0.5`; a command older than this (or than a shorter positive port timeout) when the engine applies it is rejected; also rejects stale/future nonzero command stamps |

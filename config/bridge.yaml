@@ -3,6 +3,8 @@
     topic_prefix: "~"
     world_frame: world
     base_frame: base_link
+    center_frame: ""  # Odometry child frame meaning the chassis control center; empty = root only
+    frame_prefix: ""  # prepended to every published/expected frame_id, like robot_state_publisher
     duration: 0.0
     command_timeout_s: 0.5
     feedback_timeout_s: 0.25

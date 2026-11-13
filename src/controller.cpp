@@ -731,6 +731,10 @@ std::uint64_t Controller::feedback_base(const Eigen::Isometry3d &p,double age) {
   }
   base_candidate_stamp_=stamp; auto &s=base_input_.write(); s.value=v;s.receipt=stamp;s.sequence=++next_sequence_; base_input_.publish();return next_sequence_;
 }
+std::uint64_t Controller::feedback_center(const Eigen::Isometry3d &c,double age) {
+  if(!chassis_) throw std::invalid_argument("center odometry requires a chassis module");
+  return feedback_base(c*center_in_root_.inverse(),age);
+}
 bool Controller::joints_synced() const {
   for (std::size_t g=0;g<joint_groups_.size();++g) if (joint_groups_[g] && !engine_->group_attached(g)) return false;
   return true;
