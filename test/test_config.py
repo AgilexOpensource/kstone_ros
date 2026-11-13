@@ -81,27 +81,87 @@ def test_manually_disabled_module_requires_explicit_enable(start_node, probe):
                and states[-1]["ports"]["target"] == pytest.approx([0.02]))
 
 
+_DOC_KINDS = {"pub": "pub", "发布": "pub", "sub": "sub", "订阅": "sub",
+              "srv": "srv", "服务": "srv"}
+_SRC_KINDS = {"publisher": "pub", "subscribe": "sub", "service": "srv"}
+
+
+def _ros_type(cpp):
+    """`sensor_msgs::msg::JointState` -> `sensor_msgs/JointState`."""
+    parts = cpp.split("::")
+    return f"{parts[0]}/{parts[-1]}"
+
+
+def documented_interfaces(text):
+    """(name, kind, type) rows of the README interface table, layout-independent."""
+    rows = []
+    for line in text.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        names = re.findall(r"`([^`]+)`", cells[0])
+        if not names or not all(n.startswith("~/") for n in names):
+            continue
+        kind = re.match(r"\s*([^\s`]+)", cells[1])
+        types = re.findall(r"`([^`]+)`", cells[1])
+        assert kind and kind[1].lower() in _DOC_KINDS and len(types) == 1, line
+        msg = types[0].replace("/msg/", "/").replace("/srv/", "/")
+        rows += [(n, _DOC_KINDS[kind[1].lower()], msg) for n in names]
+    return rows
+
+
+def source_interfaces(source):
+    """Default (`~/...`) endpoints the node registers; per-module ids become `M`."""
+    aliases = {a: _ros_type(t) for a, t in
+               re.findall(r"^using (\w+) = ([\w:]+);", source, re.M)}
+    variables = {}
+
+    def resolve(expr):
+        expr = " ".join(expr.split())
+        if expr in variables:
+            return variables[expr]
+        joined = re.fullmatch(r'(\w+) ?\+ ?"(/[^"]+)"', expr)
+        if joined and joined[1] in variables:
+            return variables[joined[1]] + joined[2]
+        call = re.fullmatch(r"topic\((.*)\)", expr)
+        if not call:
+            return None  # parameter-configured endpoint, no fixed default name
+        inner = call[1].replace(" ", "")
+        if inner == "id":
+            return "~/M"
+        literal = re.fullmatch(r'(id\+)?"/?([^"]+)"', inner)
+        if not literal:
+            return None
+        return ("~/M/" if literal[1] else "~/") + literal[2]
+
+    found = set()
+    # Assignments and registrations in source order, since local names are reused.
+    pattern = (r"\b(?P<var>\w+) ?= ?(?P<value>topic\([^;,()]*\))"
+               r"|\b(?P<kind>publisher|subscribe|service)<(?P<cpp>[\w:]+)>\(\s*"
+               r"(?P<arg>(?:[^,()]|\([^()]*\))+)")
+    for match in re.finditer(pattern, source):
+        if match["var"]:
+            variables[match["var"]] = resolve(match["value"])
+            continue
+        name = resolve(match["arg"])
+        if name:
+            cpp = match["cpp"]
+            found.add((name, _SRC_KINDS[match["kind"]], aliases.get(cpp) or _ros_type(cpp)))
+    return found
+
+
 def test_bilingual_quickstart_contract():
     package = Path(__file__).resolve().parents[1]
     documents = [(package / name).read_text()
                  for name in ("README.md", "README.zh-CN.md")]
-    expected = [
-        ("~/joint_states", "JointState"),
-        ("~/odom", "Odometry"),
-        ("~/feedback/joint_states", "JointState"),
-        ("~/feedback/cmd_vel", "Twist"),
-        ("~/state", "String"), ("~/discover", "String"),
-        ("~/control/joint", "JointState"),
-        ("~/M/feedback/pose", "PoseStamped"),
-        ("~/M/control/pose", "PoseStamped"),
-        ("~/M/control/cmd_vel", "Twist"),
-        ("~/home", "Trigger"), ("~/M/enable", "SetBool"),
-        ("~/M/home", "Trigger"),
-    ]
+    provided = source_interfaces((package / "src" / "node.cpp").read_text())
+    assert ("~/M/enable", "srv", "std_srvs/SetBool") in provided
+    tables = [documented_interfaces(text) for text in documents]
+    assert tables[0] == tables[1]
+    assert len(set(tables[0])) == len(tables[0])
+    assert set(tables[0]) == provided
     blocks = []
     for text in documents:
-        interfaces = re.findall(r"^\| `(~\/[^`]+)` \| [^`|\n]*`([^`]+)`", text, re.M)
-        assert interfaces == expected
         for obsolete in ("~/cmd_vel", "~/cmd_vel_stamped",
                          "~/extra_joint_commands", "~/base_pose", "~/driver/feedback/joint_states"):
             assert f"`{obsolete}`" not in text
