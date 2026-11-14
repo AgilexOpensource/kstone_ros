@@ -87,6 +87,7 @@ ros2 topic pub -r 10 /kstone/chassis/control/cmd_vel geometry_msgs/msg/Twist \
 | `~/M/feedback/pose` | 发布 `geometry_msgs/PoseStamped` | frame 或底盘的当前位姿 |
 | `~/home`、`~/M/home` | 服务 `std_srvs/Trigger` | 让所有受控模块或单个模块回零 |
 | `~/M/enable` | 服务 `std_srvs/SetBool` | 启用或禁用一个模块 |
+| `~/driver_io` | 服务 `std_srvs/SetBool` | 暂停或恢复与驱动的反馈和命令收发 |
 
 反馈门控、目标规则、回零、state 字段、全部节点参数、QoS 和故障处理见 [docs/interfaces.zh-CN.md](docs/interfaces.zh-CN.md)。
 

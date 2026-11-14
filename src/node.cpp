@@ -102,18 +102,21 @@ public:
     {
       if (feedback_joint.empty() || get_node_topics_interface()->resolve_topic_name(feedback_joint) != get_node_topics_interface()->resolve_topic_name(topic("joint_states")))
         subscribe<Joints>(topic("joint_states"), [this](const Joints &m) {
+          if (!driver_io_) return;
           core_->feedback_joints(m.name,m.position,feedback_age(m.header));
         }, rclcpp::SensorDataQoS());
       if (!feedback_joint.empty())
         subscribe<Joints>(
             feedback_joint,
             [this](const Joints &m) {
+              if (!driver_io_) return;
               core_->feedback_joints(m.name, m.position,
                                      feedback_age(m.header));
             },
             rclcpp::SensorDataQoS());
       if (core_->has_root())
         subscribe<nav_msgs::msg::Odometry>(topic("odom"), [this](const nav_msgs::msg::Odometry &msg) {
+          if (!driver_io_) return;
           const bool center = !center_.empty() && msg.child_frame_id == center_;
           if (!center && !msg.child_frame_id.empty() && msg.child_frame_id != base_) throw std::invalid_argument("unexpected odometry child frame");
           Pose p; p.header=msg.header; p.pose=msg.pose.pose;
@@ -124,6 +127,7 @@ public:
         subscribe<Pose>(
             feedback_base,
             [this](const Pose &m) {
+              if (!driver_io_) return;
               core_->feedback_base(pose_input(m, world_, false),
                                    feedback_age(m.header));
             },
@@ -198,6 +202,9 @@ public:
     service<Trigger>(topic("home"), [this](auto, auto response) {
       accepted(response, [&] { return core_->reset_home(); });
     });
+    service<SetBool>(topic("driver_io"), [this](auto request, auto response) {
+      response->success = set_driver_io(request->data, response->message);
+    });
 
     if (publish_tf) {
       if (!core_->has_root() || world_ == base_)
@@ -231,7 +238,7 @@ public:
     const std::vector<std::string> module_names={"state","feedback/pose","control/pose","control/cmd_vel","enable","home"};
     for(const auto &m:core_->modules()) for(std::size_t i=0;i<module_names.size();++i)
       display_rank(topic(m->id()+"/"+module_names[i]),i<4?11+int(i):13+int(i));
-    display_rank(topic("home"),16);
+    display_rank(topic("home"),16); display_rank(topic("driver_io"),17);
     auto ordered_interfaces=[&](const kstone_ros::Node &records) {
       auto rows=records.items();
       auto rank=[&](const kstone_ros::Node &record) {
@@ -468,6 +475,22 @@ private:
     if (base_command_pub_) base_command_pub_->publish(m);
     canonical_base_command_pub_->publish(m);
   }
+  // Resume only after every group detached, so output restarts via a fresh-feedback attach.
+  bool set_driver_io(bool enable, std::string &message) {
+    if (!enable || driver_io_) {
+      driver_io_ = enable;
+      message = enable ? "driver io already enabled" : "driver io paused";
+      return true;
+    }
+    for (const auto &group : core_->snapshot().engine.groups)
+      if (group.attached) {
+        message = "feedback group '" + group.name + "' still attached; retry after it detaches";
+        return false;
+      }
+    driver_io_ = true;
+    message = "driver io enabled; output resumes after fresh feedback reattaches";
+    return true;
+  }
   void warn(const std::string &key, const std::string &message) {
     const double t = core_->now();
     auto i = warnings_.find(key);
@@ -500,12 +523,12 @@ private:
         else if(record.level>=kstone::LogLevel::warn) RCLCPP_WARN(get_logger(),"%s: %s",record.component.c_str(),record.message.c_str());
         else RCLCPP_DEBUG(get_logger(),"%s: %s",record.component.c_str(),record.message.c_str());
       }
-      if (safe && core_->joints_attached) {
+      if (driver_io_ && safe && core_->joints_attached) {
         const auto m = joint_message(core_->command_q(), &core_->velocity());
         canonical_joint_command_pub_->publish(m);
         if (joint_command_pub_) joint_command_pub_->publish(m);
       }
-      base_output(core_->base_attached, safe ? core_->base_velocity() : kstone::Twist2D{});
+      base_output(driver_io_ && core_->base_attached, safe ? core_->base_velocity() : kstone::Twist2D{});
       if (tf_) {
         const auto pose = pose_message(core_->base_pose(), world_);
         geometry_msgs::msg::TransformStamped t;
@@ -522,6 +545,7 @@ private:
         // Advance from the deadline, not from t, so tick jitter does not lower the rate.
         next_state_ = next_state_ && *next_state_ + 1 / state_rate_ > t ? *next_state_ + 1 / state_rate_ : t + 1 / state_rate_;
         auto state = core_->state();
+        state.set("driver_io", driver_io_);
         String message;
         message.data = json(state);
         state_pub_->publish(message);
@@ -546,6 +570,7 @@ private:
   double command_timeout_{0.5}, feedback_timeout_{0.25}, state_rate_{30}, timer_dt_{0};
   std::optional<double> next_state_, base_zero_until_;
   double base_hold_{0.5};
+  bool driver_io_{true};
   std::map<std::string, double> warnings_;
   std::string last_fault_;
   std::map<std::string, std::string> resolved_;

@@ -87,6 +87,7 @@ Names are private to the node: with the default node name `kstone`, `~/state` is
 | `~/M/feedback/pose` | Pub `geometry_msgs/PoseStamped` | Current pose of the frame or chassis |
 | `~/home`, `~/M/home` | Srv `std_srvs/Trigger` | Home all controlled modules, or one module |
 | `~/M/enable` | Srv `std_srvs/SetBool` | Enable or disable one module |
+| `~/driver_io` | Srv `std_srvs/SetBool` | Pause or resume driver feedback and command exchange |
 
 See [docs/interfaces.md](docs/interfaces.md) for feedback gating, target rules, homing, the state fields, all node parameters, QoS and fault handling.
 

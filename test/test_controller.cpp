@@ -565,7 +565,7 @@ int main() {
       check(c.written && !c.joints_attached && c.fault.empty(), "stale detaches without pausing");
       check(attach(f, c, j) > 10 && c.written, c.fault);
     });
-    test("finite out-of-range feedback stays raw while commands and FK synchronize to clipped state", [] {
+    test("finite out-of-range feedback starts raw and transitions continuously to legal synchronization", [] {
       Fixture f;
       Controller c(f.config(true, true, [](Node &n) {
         auto modules = *n.find("modules");
@@ -578,16 +578,30 @@ int main() {
         if (j.names[i] == "slide_y") j.positions[i] = -0.35;
         if (j.names[i] == "finger_joint") j.positions[i] = -0.01;
       }
-      attach(f, c, j);
+      f.advance(); c.feedback_joints(j.names, j.positions); cycle(c);
       const auto at = c.measured().eval();
       const auto clipped = clipped_seed(c, at);
       check(!clipped.isApprox(at, 1e-12), "fixture must contain actual out-of-limit feedback");
-      check(c.command_q().isApprox(clipped, 1e-12), "startup command must clip measured feedback to model limits");
+      check(c.command_q().isApprox(at, 1e-12), "FIRST startup command must equal raw feedback");
       check(c.pose("tool_pose", "target").matrix().isApprox(frame_at(c, at, "tool_link", "base_link").matrix(), 1e-12), "measured FK display must remain raw while command/FK targets are clipped");
-      for (int k = 0; k < 5; ++k) {
+      auto previous_transition = c.command_q().eval();
+      auto previous_velocity = c.snapshot().engine.command.v.eval();
+      Eigen::VectorXd previous_acceleration = Eigen::VectorXd::Zero(previous_velocity.size());
+      for (int k = 0; k < 150; ++k) {
         f.advance(); c.feedback_joints(j.names, j.positions); cycle(c);
-        check(c.measured().isApprox(at, 1e-12) && c.command_q().isApprox(clipped, 1e-12), "raw feedback must remain displayed while default IK holds the clipped FK target");
+        check(c.measured().isApprox(at, 1e-12), "raw feedback must remain displayed");
+        const Eigen::VectorXd acceleration = (c.snapshot().engine.command.v - previous_velocity) / c.dt();
+        for (const auto &joint : c.model()->joints()) {
+          if (joint.nq != 1 || joint.nv != 1) continue;
+          const double limit = c.model()->velocity_limit()[joint.idx_v];
+          check(std::abs(c.command_q()[joint.idx_q] - previous_transition[joint.idx_q]) <= limit * c.dt() + 1e-9, "transition q delta obeys velocity limit");
+          check(std::abs(acceleration[joint.idx_v]) <= 2 * limit + 1e-8, "transition acceleration bound");
+          check(std::abs(acceleration[joint.idx_v] - previous_acceleration[joint.idx_v]) <= 20 * limit * c.dt() + 1e-8, "transition jerk bound");
+          check(std::abs(c.command_q()[joint.idx_q] - clipped[joint.idx_q]) <= std::abs(previous_transition[joint.idx_q] - clipped[joint.idx_q]) + 1e-9, "resting out-of-limit synchronization returns monotonically");
+        }
+        previous_transition = c.command_q(); previous_velocity = c.snapshot().engine.command.v; previous_acceleration = acceleration;
       }
+      check(c.command_q().isApprox(clipped, 1e-9), "startup transition actually completes");
       rejects([&] { c.feedback_joints({}, {}); });
       rejects([&] { c.feedback_joints({"slide_x"}, {}); });
       rejects([&] { c.feedback_joints({"slide_x", "slide_x"}, {0, 0}); });
@@ -623,17 +637,21 @@ int main() {
       for (int k = 0; k < 20; ++k) { f.advance(); cycle(c); }
       check(!c.joints_attached, "feedback loss detaches");
       for (std::size_t i = 0; i < j.names.size(); ++i) if (j.names[i] == "slide_x") j.positions[i] = 0.38;
-      attach(f, c, j);
+      f.advance(); c.feedback_joints(j.names, j.positions); cycle(c);
       const auto reattached = c.measured().eval();
       const auto reattached_clipped = clipped_seed(c, reattached);
-      check(c.command_q().isApprox(reattached_clipped, 1e-12), "reattach first command equals clipped feedback");
+      check(c.command_q().isApprox(reattached, 1e-12), "reattach FIRST command equals raw feedback");
       check(c.pose("tool_pose", "target").matrix().isApprox(frame_at(c, reattached, "tool_link", "base_link").matrix(), 1e-12), "reattach measured FK display remains raw");
-      for (int k = 0; k < 5; ++k) {
+      auto last = c.command_q().eval();
+      for (int k = 0; k < 150; ++k) {
         f.advance(); c.feedback_joints(j.names, j.positions); cycle(c);
-        check(c.measured().isApprox(reattached, 1e-12) && c.command_q().isApprox(reattached_clipped, 1e-12), "reattach clips commands but neither feedback nor expired target is replayed");
+        check(c.measured().isApprox(reattached, 1e-12), "reattach preserves raw measurement");
+        check(std::abs(c.command_q()[ix] - last[ix]) <= 0.3 * c.dt() + 1e-9, "reattach q is slew constrained");
+        last = c.command_q();
       }
+      check(c.command_q().isApprox(reattached_clipped, 1e-9), "reattach finishes without replaying expired targets");
     });
-    test("aggregate partial target preserves omitted clipped joint targets", [] {
+    test("aggregate partial target preserves omitted recovered joint targets", [] {
       Fixture f;
       Controller c(f.joint_config(), f.options());
       auto j = c.joint_state(c.measured());
@@ -644,7 +662,8 @@ int main() {
       attach(f, c, j);
       const auto at = c.measured().eval();
       const auto clipped = clipped_seed(c, at);
-      check(c.command_q().isApprox(clipped, 1e-12), "aggregate startup clips command seed");
+      for (int k = 0; k < 150; ++k) { f.advance(); c.feedback_joints(j.names, j.positions); cycle(c); }
+      check(c.command_q().isApprox(clipped, 1e-9), "aggregate startup completes constrained synchronization");
       c.joint_targets({"slide_x"}, {0.2});
       for (int k = 0; k < 15; ++k) {
         f.advance(); c.feedback_joints(j.names, j.positions); cycle(c);
@@ -656,7 +675,7 @@ int main() {
       check(!c.command_q().isApprox(clipped, 1e-9) && c.fault.empty(), "aggregate explicit target moves without replacing omitted clipped target");
     });
     if (std::getenv("KSTONE_LOOKIE_CONFIG") && std::getenv("KSTONE_LOOKIE_URDF"))
-      test("Lookie deployed combination: 32 independent joints clip and run automatic IK at startup and reattach", [] {
+      test("Lookie deployed combination: 32 independent joints synchronize with first raw command and Ruckig", [] {
         Fixture f;
         auto n = take(kstone::load_yaml(std::getenv("KSTONE_LOOKIE_CONFIG")));
         const std::filesystem::path urdf = std::getenv("KSTONE_LOOKIE_URDF");
@@ -699,9 +718,10 @@ int main() {
           check(it != j.names.end(), "missing independent joint " + name);
           j.positions[std::size_t(it - j.names.begin())] = value;
         };
-        set_position("head_joint1", 0.949);
-        set_position("l_arm_joint4", 0.08217);
-        set_position("r_arm_joint4", -0.00487);
+        set_position("head_joint1", 0.9466524124145508);
+        set_position("head_joint2", 0.0004828238452319056);
+        set_position("l_arm_joint4", 0.05398303376418461);
+        set_position("r_arm_joint4", -0.03719296635999916);
         const auto base = c.base_pose();
         auto feed = [&] {
           f.advance();
@@ -728,10 +748,17 @@ int main() {
                   "measured FK display must remain raw: " + entry.first);
           }
         };
-        double max_automatic_delta = 0.0;
+        double max_command_delta = 0.0;
         const auto initial = clipped_seed(c, raw_seed());
         auto validate = [&](const Eigen::VectorXd &clipped) {
-          check(bool(c.model()->check_position_limits(c.command_q())), "command must obey unchanged model limits");
+          for (const auto &name : j.names) {
+            const auto &joint = c.model()->joints()[take(c.model()->joint_id(name))];
+            if (!c.model()->has_position_limit(joint.id)) continue;
+            const double lower = std::min(c.model()->lower_position_limit()[joint.idx_q], c.measured()[joint.idx_q]);
+            const double upper = std::max(c.model()->upper_position_limit()[joint.idx_q], c.measured()[joint.idx_q]);
+            check(c.command_q()[joint.idx_q] >= lower - 1e-8 && c.command_q()[joint.idx_q] <= upper + 1e-8,
+                  "command may return from raw limits but never worsen: " + name);
+          }
           const auto feedback = c.joint_state(c.measured());
           const auto command = c.joint_state(c.command_q());
           for (std::size_t i = 0; i < j.names.size(); ++i) {
@@ -742,23 +769,66 @@ int main() {
             const auto output = std::find(command.names.begin(), command.names.end(), j.names[i]);
             check(output != command.names.end(), "missing independent command joint");
             const auto id = take(c.model()->joint_id(j.names[i]));
-            max_automatic_delta = std::max(max_automatic_delta,
+            max_command_delta = std::max(max_command_delta,
                 std::abs(command.positions[std::size_t(output - command.names.begin())] -
                          take(c.model()->joint_position(clipped, id))));
           }
         };
-        feed();
+        // Match the node: owner starts before subscriber callbacks, and tick() publishes only
+        // poll-safe snapshots with joints_attached, not the first hidden FeedbackRobot::write.
+        cycle(c);
+        auto first_published = [&] {
+          int suppressed = 0;
+          for (int k = 0; k < 50; ++k) {
+            feed();
+            if (c.written && c.joints_attached) {
+              check(suppressed > 5, "exercise the real feedback settling/publication window");
+              for (const auto &name : j.names) {
+                const auto &joint = c.model()->joints()[take(c.model()->joint_id(name))];
+                check(std::abs(c.command_q()[joint.idx_q] - c.measured()[joint.idx_q]) < 1e-12,
+                      "FIRST PUBLIC attached command equals latest raw joint: " + name);
+                check(std::abs(c.snapshot().engine.command.v[joint.idx_v]) < 1e-12,
+                      "FIRST PUBLIC transition velocity is zero: " + name);
+              }
+              return;
+            }
+            ++suppressed;
+            for (const auto &name : {"head_joint1", "l_arm_joint4", "r_arm_joint4"}) {
+              const auto &joint = c.model()->joints()[take(c.model()->joint_id(name))];
+              check(std::abs(c.command_q()[joint.idx_q] - c.measured()[joint.idx_q]) < 1e-12,
+                    "suppressed settling writes cannot advance correction: " + std::string(name));
+            }
+          }
+          check(false, "joint publication must eventually attach");
+        };
+        first_published();
         check_raw_fk();
         validate(initial);
         check(enabled(c, "gaze") && enabled(c, "com") && enabled(c, "self_collision"), "automatic modules retain their enabled startup state");
-        for (int k = 1; k < 35; ++k) {
-          // Sensed arm motion requests gaze through existing idle-claim arbitration, not a target.
-          if (k == 1) set_position("l_arm_joint2", 0.01);
+        auto previous_q = c.command_q().eval();
+        auto previous_v = c.snapshot().engine.command.v.eval();
+        Eigen::VectorXd previous_a = Eigen::VectorXd::Zero(previous_v.size());
+        for (int k = 1; k < 120; ++k) {
           const auto seed = clipped_seed(c, raw_seed());
           feed(); validate(seed);
+          const Eigen::VectorXd a = (c.snapshot().engine.command.v - previous_v) / c.dt();
+          for (const auto &name : j.names) {
+            const auto &joint = c.model()->joints()[take(c.model()->joint_id(name))];
+            const double limit = c.model()->velocity_limit()[joint.idx_v];
+            check(std::abs(c.command_q()[joint.idx_q] - previous_q[joint.idx_q]) <= limit * c.dt() + 1e-8, "real32 q velocity bound: " + name);
+            if (c.model()->has_position_limit(joint.id) &&
+                (previous_q[joint.idx_q] < c.model()->lower_position_limit()[joint.idx_q] - 1e-8 ||
+                 previous_q[joint.idx_q] > c.model()->upper_position_limit()[joint.idx_q] + 1e-8)) {
+              check(std::abs(a[joint.idx_v]) <= 2 * limit + 1e-7, "real32 acceleration bound: " + name);
+              check(std::abs(a[joint.idx_v] - previous_a[joint.idx_v]) <= 20 * limit * c.dt() + 1e-6, "real32 jerk bound: " + name);
+              check(std::abs(c.command_q()[joint.idx_q] - initial[joint.idx_q]) <= std::abs(previous_q[joint.idx_q] - initial[joint.idx_q]) + 1e-8, "real32 monotonic resting recovery: " + name);
+            }
+          }
+          previous_q = c.command_q(); previous_v = c.snapshot().engine.command.v; previous_a = a;
         }
+        check(bool(c.model()->check_position_limits(c.command_q())), "real32 transition completes in unchanged model limits");
         check(c.joints_attached && c.base_attached && c.written, "real configuration attaches offline");
-        check(max_automatic_delta > 1e-8, "automatic IK/gaze must operate without a fresh target");
+        check(max_command_delta > 1e-8, "synchronization must progress without a fresh target");
         c.joint_targets({"head_joint1"}, {0.85});
         const auto before = c.command_q().eval();
         for (int k = 0; k < 10; ++k) {
@@ -785,10 +855,10 @@ int main() {
         set_position("l_arm_joint4", 0.08217);
         set_position("r_arm_joint4", -0.00487);
         const auto reattached = clipped_seed(c, raw_seed());
-        feed();
+        first_published();
         check_raw_fk();
         validate(reattached);
-        for (int k = 1; k < 35; ++k) {
+        for (int k = 1; k < 120; ++k) {
           if (k == 5) set_position("l_arm_joint2", 0.04);
           const auto seed = clipped_seed(c, raw_seed());
           feed(); validate(seed);
@@ -798,7 +868,7 @@ int main() {
           if (c.modules()[i]->id() == "com" || c.modules()[i]->id() == "self_collision")
             check(c.snapshot().engine.modules[i].running, "reattached protection runs without a fresh target");
         check(c.joints_attached && c.written, "reattach resumes clipped commands and normal automatic IK");
-        std::cout << "Lookie independent_joints=32 max_automatic_delta=" << max_automatic_delta << '\n';
+        std::cout << "Lookie independent_joints=32 max_command_delta=" << max_command_delta << '\n';
       });
     test("continuous feedback coordinates",
          [] {

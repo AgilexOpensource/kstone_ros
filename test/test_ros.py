@@ -310,6 +310,49 @@ def test_dds_feedback_gates_commands_and_resumes_on_fresh_sensing(start_node, pr
     probe.wait(bridge, lambda: attached(INITIAL_POSITIONS) and len(commands) > before)
 
 
+def test_dds_driver_io_pause_waits_for_detach_and_resyncs(start_node, probe, tmp_path):
+    config = config_variant(tmp_path, fixed=True, no_chassis=True)
+    bridge = start_node(config_file=str(config))
+    commands = subscribe(probe, bridge, JointState, "feedback/joint_states")
+    states = probe.subscribe_json(bridge.topic("state"))
+    feedback = probe.node.create_publisher(JointState, bridge.topic("joint_states"), 10)
+    probe.wait(bridge, lambda: states and feedback.get_subscription_count())
+    assert states[-1]["driver_io"]
+    def publish(position):
+        feedback.publish(JointState(name=JOINT_NAMES, position=position))
+    def driver_io(enable):
+        return probe.call(bridge, SetBool, "driver_io", SetBool.Request(data=enable))
+    probe.wait(bridge, lambda: publish(INITIAL_POSITIONS) or (commands and states[-1]["joints_attached"]))
+    assert driver_io(False).success
+    probe.wait(bridge, lambda: not states[-1]["driver_io"])
+    probe.spin_for(bridge, 0.15)
+    before = len(commands)
+    # Feedback keeps arriving, but is dropped while paused, so the engine detaches.
+    probe.wait(bridge, lambda: publish(INITIAL_POSITIONS) or not states[-1]["joints_attached"])
+    probe.spin_for(bridge, 0.2)
+    assert len(commands) == before
+    measured = [0.05, -0.02, 0.1, 0.01]
+    response = driver_io(True)
+    assert response.success, response.message
+    probe.wait(bridge, lambda: publish(measured) or (len(commands) > before and states[-1]["joints_attached"]))
+    assert states[-1]["driver_io"]
+    assert dict(zip(commands[before].name, commands[before].position)) == pytest.approx(dict(zip(JOINT_NAMES, measured)), abs=1e-6)
+
+
+def test_dds_driver_io_resume_is_rejected_while_attached(start_node, probe, tmp_path):
+    config = config_variant(tmp_path, fixed=True, no_chassis=True)
+    bridge = start_node(config_file=str(config), feedback_timeout_s=1.0)
+    commands = subscribe(probe, bridge, JointState, "feedback/joint_states")
+    states = probe.subscribe_json(bridge.topic("state"))
+    feedback = probe.node.create_publisher(JointState, bridge.topic("joint_states"), 10)
+    probe.wait(bridge, lambda: states and feedback.get_subscription_count())
+    probe.wait(bridge, lambda: feedback.publish(JointState(name=JOINT_NAMES, position=INITIAL_POSITIONS)) or (commands and states[-1]["joints_attached"]))
+    assert probe.call(bridge, SetBool, "driver_io", SetBool.Request(data=False)).success
+    response = probe.call(bridge, SetBool, "driver_io", SetBool.Request(data=True))
+    assert not response.success and "still attached" in response.message
+    probe.wait(bridge, lambda: not states[-1]["driver_io"])
+
+
 def test_feedback_chassis_uses_base_odometry_and_gates_stale_base(start_node, probe):
     # Driver feedback must reach the chassis odometry API, not only joint q.
     base_topic = "/ns_base_feedback_" + str(time.monotonic_ns())
@@ -915,6 +958,7 @@ def test_discovery_presentation_driver_engine_module_topics_then_services(start_
         for i, name in enumerate(module_names):
             ranks[bridge.topic(module["id"] + "/" + name)] = 11 + i if i < 4 else 13 + i
     ranks[bridge.topic("home")] = 16
+    ranks[bridge.topic("driver_io")] = 17
     def check_order(records):
         values = [ranks[r.get("topic", r.get("service"))] for r in records]
         assert values == sorted(values)

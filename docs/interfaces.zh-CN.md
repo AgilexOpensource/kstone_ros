@@ -15,13 +15,14 @@
 | `~/feedback/joint_states` | 发布 `sensor_msgs/JointState` | 按 URDF 树顺序的关节位置命令，不是测量反馈 |
 | `~/feedback/cmd_vel` | 发布 `geometry_msgs/Twist` | 底盘机体坐标系中的底盘命令 |
 
-驱动输出依赖真实反馈，并使用其模型限位投影而不是陈旧的模型初值。第一条位置命令可能从越界实测位置跳到裁限后、经 IK 调整的状态。
+驱动输出依赖真实反馈，而不是陈旧模型初值。越界标量同步使用真实 Ruckig，不再瞬时裁限。
 
 - 新鲜的 `~/joint_states` 覆盖所有未锁定关节之前，`~/feedback/joint_states` 不发布。新鲜的 `~/odom` 到达之前，`~/feedback/cmd_vel` 不发布。
-- 接入需要持续 `feedback_timeout_s` 的新鲜反馈。期间每个周期用裁限后的测量状态覆盖模型命令，第一个周期还把模块目标重置为裁限状态，因此第一条发布命令从裁限状态开始，且已允许正常 IK/自动纠偏。已启用的模块保持启用。
-- 支持的关节反馈只要合法有限，即使越过软件位置限位也原样接收和展示。名称为空或全部不支持、长度不匹配、重复名称、NaN/Inf、非法时间年龄及乱序样本仍原子拒绝。启动/附着/重附着及暂停恢复同步时，先将 command/ideal 裁到模型限位，再初始化关节目标及位姿 FK/轨迹；不裁原始反馈。重附着丢弃失联目标；正常生命周期内的有效目标及既有命令过期规则保持不变。
-- 采用旧 `ik_teleop_ros` 行为：同步后无需 fresh target/home，即正常运行 IK、自动 gaze、CoM/碰撞恢复及 null-space。不设运动意图门控、不添加自动恢复服务或新的全机输出抑制。第一条位置命令不保证等于原始反馈：裁限可以立即产生位置突变，随后仍有正常 IK/自动纠偏。原有轨迹限位、闭环碰撞/CoM 保护、终点检查和守卫失败处理仍适用。非独立驱动的 mimic 从关节遵循模型耦合；参见 kstone 的 `docs/zh-CN/robot.md`。
-- 发布配置离线组合回归：运行 `test_controller` 时，把 `KSTONE_LOOKIE_CONFIG` 设为发布的 `kstone.yaml`，把 `KSTONE_LOOKIE_URDF` 设为碰撞 URDF。测试核对旁边 `driver_joint_bridge.yaml` 的全部 32 个独立命令关节，验证原始反馈不变、命令遵守限位、启动/重附着实测 FK 展示仍基于原始反馈，以及无 fresh target 的自动运动。核心引擎回归另行断言启动/重附着/恢复的关节目标及完整 FK/轨迹变换从裁限状态重置。离线执行只适配资源路径及实时权限；保留 gaze、CoM、自碰撞、null-space、三轮锁定及 mimic 耦合。 发布配置的 idle 关节占用可能保持静态启动姿态；组合测试在附着窗口加入小幅实测手臂变化，通过既有仲裁触发自动 gaze，全程不发送 target/home。
+- 接入需要持续 `feedback_timeout_s` 的新鲜反馈。等待窗口持续同步最新原始测量，未附着时被禁止下发的内部写入不推进修正。同步组首条已附着命令位置等于原始反馈（mimic 按模型派生），速度为零；只有之后的已附着写入才推进连续 `JointTrajectory`，使用守卫缩放速度限位及默认加速度/jerk 因子 2/10，不因每个新鲜样本重启。独立引擎反馈组保留各自接入生命周期；附着后外部转发器继续禁止下发仍属于下述独立转发边界。
+- 合法有限的受支持反馈原样接收和展示，包括越界位置。名称为空或全部不支持、长度不匹配、重复名称、NaN/Inf、非法时间年龄及乱序样本仍原子拒绝。驱动或锁定修正关节的模块保持启用和约束，但挂起任务及 prepare，目标/FK/轨迹从当前命令重新基准。完成后受影响模块从合法姿态重新基准；无关模块及反馈组正常继续。限位内同步及命令过期规则不变；越界修正丢弃受影响目标。过期重附着及通用暂停恢复从最新原始反馈重启。求解、守卫或写入失败不推进轨迹，也不放宽模型限位。
+- 修正后 IK、gaze、CoM/碰撞恢复及 null-space 无需新 target/home 即恢复，仍服从既有仲裁。不添加运动意图门控或新服务；启动轨迹不保证姿态可行，也不覆盖普通模块接管的加速度/jerk。参见 kstone 的 `docs/zh-CN/robot.md`。
+- **外部转发边界：** 转发器关闭时，机器人可能未运动而核心已完成修正。实际打开或重新打开时必须用新鲜反馈重同步，并协调首条成功的新命令。已有引擎 `set_paused(true)` 后 `set_paused(false)` 提供该生命周期；启用调试协议时用 `pause`，先 `paused: true` 再 `false`。不新增 ROS 服务。冷启动完成或附着不等于转发安全；guardian 门控及临时位置差检查保持不变，重新打开仍未验证。
+- 发布配置离线回归：运行 `test_controller` 时设置 `KSTONE_LOOKIE_CONFIG` 为发布 `kstone.yaml`，`KSTONE_LOOKIE_URDF` 为碰撞 URDF。核对相邻 `driver_joint_bridge.yaml` 的全部 32 个独立命令关节，验证启动/重附着首条原始引擎命令、原始实测 FK、逐周期位置变化及恢复速度/加速度/jerk 和实际完成。核心测试另外对比真实 Ruckig 输出，验证目标/FK 一致性、mimic、频率变化及失败回滚。只适配资源路径和实时权限，保留发布 gaze、CoM、碰撞、null-space 及锁定轮关节。
 - 关节和底盘各自独立接入。自由根是单独的引擎反馈组 `base`，除非 YAML 的 `feedback_groups` 另行安排。
 - 反馈过期达 `feedback_timeout_s` 时，对应输出断开：关节命令停止；`cmd_vel` 发送零速度持续一个 `command_timeout_s` 后停止。新鲜反馈到达后重新接入。
 - 没有反馈时引擎照常运行，没有空跑模式。无硬件测试时，用仿真器发布 `~/joint_states` 和 `~/odom`。
@@ -63,6 +64,7 @@
 | `~/home` | `std_srvs/Trigger` | 执行 kstone `home_all`，并将底盘速度置零 |
 | `~/M/home` | `std_srvs/Trigger` | 让一个可回零模块回零 |
 | `~/M/enable` | `std_srvs/SetBool` | 启用或禁用一个模块 |
+| `~/driver_io` | `std_srvs/SetBool` | 暂停或恢复 ROS 层与驱动的数据收发；引擎继续运行 |
 
 ```bash
 ros2 service call /kstone/tool_pose/home std_srvs/srv/Trigger "{}"
@@ -73,6 +75,9 @@ ros2 service call /kstone/tool_pose/enable std_srvs/srv/SetBool "{data: false}"
 - 回零移动到 YAML 中的回零位置。已禁用的模块可能拒绝回零，`~/home` 不是原子操作。
 - 响应 `accepted request_id=N` 表示已排队，不表示已完成。按下文在 `~/state` 中跟踪结果。
 - 回零前停止目标发布；`outcomes` 只保留 32 条，持续的目标流会很快把服务结果挤出。
+- `~/driver_io` 设为 false 后立即丢弃驱动反馈并停发关节命令；`cmd_vel` 先发一个 `command_timeout_s` 的零速，然后停发。反馈随之过期，引擎在 `feedback_timeout_s` 后断开接入。
+- `~/driver_io` 设为 true 时，只要还有反馈组处于接入状态就会失败。接受后，要等新鲜反馈重新接入才恢复输出，首条命令等于该反馈。
+- 驱动门控或电机使能变化时：先暂停，等 `joints_attached` 和 `base_attached` 都为 `false`，再操作驱动，确认电机静止后恢复。节点不读取驱动状态，何时调用此服务由单独的监控节点决定。
 
 ## State 字段
 
@@ -81,6 +86,7 @@ ros2 service call /kstone/tool_pose/enable std_srvs/srv/SetBool "{data: false}"
 | 字段 | 说明 |
 |---|---|
 | `fresh` | 上一周期所有反馈组都在 `feedback_timeout_s` 之内 |
+| `driver_io` | `~/driver_io` 暂停驱动数据收发时为 `false` |
 | `joints_attached`、`base_attached` | 关节和底盘驱动输出已接入；没有自由根时 `base_attached` 为 `false` |
 | `written` | 本周期写出了安全命令，且快照未过期 |
 | `quality` | `nominal`；某阶段保持、不精确或步长被截断时为 `degraded` |
