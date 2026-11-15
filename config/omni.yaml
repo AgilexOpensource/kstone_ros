@@ -23,12 +23,8 @@ modules:
       max_angular_velocity: 0.8
       max_linear_acceleration: 1.0
       max_linear_deceleration: 1.0
-      max_linear_reversal_deceleration: 1.0
       max_angular_acceleration: 2.0
       max_angular_deceleration: 2.0
-      max_angular_reversal_deceleration: 2.0
-      max_linear_jerk: 5.0
-      max_angular_jerk: 10.0
   tool_pose:
     type: frame_target
     frame: tool_link

@@ -123,6 +123,9 @@ public:
   Eigen::Isometry3d chassis_pose() const { return snapshot().chassis_pose; }
   kstone::Twist2D base_velocity() const;
   JointValues joint_state(const Eigen::VectorXd &, const Eigen::VectorXd * = nullptr) const;
+  // Last command of the joints whose feedback group is attached; a detached group (e.g. an unplugged hand)
+  // gets no output while the other groups keep running.
+  JointValues joint_command() const;
   Node discovery() const;
   Node state() const;
   const Snapshot &snapshot() const { return snapshots_.read(); }

@@ -17,7 +17,7 @@
 
 驱动输出依赖真实反馈，而不是陈旧模型初值。越界标量同步使用真实 Ruckig，不再瞬时裁限。
 
-- 新鲜的 `~/joint_states` 覆盖所有未锁定关节之前，`~/feedback/joint_states` 不发布。新鲜的 `~/odom` 到达之前，`~/feedback/cmd_vel` 不发布。
+- `~/feedback/joint_states` 只包含反馈组已接入的关节：某组的未锁定关节都有新鲜 `~/joint_states` 之前不发布；某组过期（例如手单独放在 `feedback_groups` 里，手掉线）时只去掉该组关节，其余组照常发布。新鲜的 `~/odom` 到达之前，`~/feedback/cmd_vel` 不发布。
 - 接入需要持续 `feedback_timeout_s` 的新鲜反馈。等待窗口持续同步最新原始测量，未附着时被禁止下发的内部写入不推进修正。同步组首条已附着命令位置等于原始反馈（mimic 按模型派生），速度为零；只有之后的已附着写入才推进连续 `JointTrajectory`，使用守卫缩放速度限位及默认加速度/jerk 因子 2/10，不因每个新鲜样本重启。独立引擎反馈组保留各自接入生命周期；附着后外部转发器继续禁止下发仍属于下述独立转发边界。
 - 合法有限的受支持反馈原样接收和展示，包括越界位置。名称为空或全部不支持、长度不匹配、重复名称、NaN/Inf、非法时间年龄及乱序样本仍原子拒绝。驱动或锁定修正关节的模块保持启用和约束，但挂起任务及 prepare，目标/FK/轨迹从当前命令重新基准。完成后受影响模块从合法姿态重新基准；无关模块及反馈组正常继续。限位内同步及命令过期规则不变；越界修正丢弃受影响目标。过期重附着及通用暂停恢复从最新原始反馈重启。求解、守卫或写入失败不推进轨迹，也不放宽模型限位。
 - 修正后 IK、gaze、CoM/碰撞恢复及 null-space 无需新 target/home 即恢复，仍服从既有仲裁。不添加运动意图门控或新服务；启动轨迹不保证姿态可行，也不覆盖普通模块接管的加速度/jerk。参见 kstone 的 `docs/zh-CN/robot.md`。
@@ -87,7 +87,8 @@ ros2 service call /kstone/tool_pose/enable std_srvs/srv/SetBool "{data: false}"
 |---|---|
 | `fresh` | 上一周期所有反馈组都在 `feedback_timeout_s` 之内 |
 | `driver_io` | `~/driver_io` 暂停驱动数据收发时为 `false` |
-| `joints_attached`、`base_attached` | 关节和底盘驱动输出已接入；没有自由根时 `base_attached` 为 `false` |
+| `joints_attached`、`base_attached` | 所有关节反馈组 / 底盘已接入；没有自由根时 `base_attached` 为 `false` |
+| `groups` | 各引擎反馈组的 `[{name, fresh, attached}]`，先是配置的组，最后是 `default` |
 | `written` | 本周期写出了安全命令，且快照未过期 |
 | `quality` | `nominal`；某阶段保持、不精确或步长被截断时为 `degraded` |
 | `fault` | 正常时为空，否则为原因，如 `driver_stale_feedback`、`held_or_stale`、`stopped`、`duration_complete` |

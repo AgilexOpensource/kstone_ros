@@ -565,6 +565,26 @@ int main() {
       check(c.written && !c.joints_attached && c.fault.empty(), "stale detaches without pausing");
       check(attach(f, c, j) > 10 && c.written, c.fault);
     });
+    test("stale feedback group withholds only its joint commands", [] {
+      Fixture f;
+      Controller c(f.config(true, true, [](Node &n) {
+        n.set("feedback_groups", Node::list({Node::map({{"name", "hand"}, {"joints", Node::list({"finger_joint"})}})}));
+      }), f.options());
+      auto j = c.joint_state(c.measured());
+      check(attach(f, c, j) > 1 && c.joint_command().names == j.names, "all groups attached output every joint");
+      JointValues body;
+      for (std::size_t i = 0; i < j.names.size(); ++i)
+        if (j.names[i] != "finger_joint") { body.names.push_back(j.names[i]); body.positions.push_back(j.positions[i]); }
+      for (int i = 0; i < 20; ++i) { f.advance(); c.feedback_joints(body.names, body.positions); cycle(c); }
+      const auto command = c.joint_command();
+      check(c.written && c.fault.empty() && !c.joints_attached, "a stale group detaches without pausing");
+      check(command.names == body.names && command.velocities.size() == body.names.size(), "only attached groups are commanded");
+      auto groups = parse_json(json(c.state())).find("groups")->items();
+      check(groups.size() == 2 && groups[0].find("name")->as_string() == "hand" && !groups[0].find("attached")->as_bool() &&
+            groups[1].find("attached")->as_bool(), "state lists per-group attachment");
+      f.advance();
+      check(attach(f, c, j) > 1 && c.joint_command().names == j.names, "the group reattaches");
+    });
     test("finite out-of-range feedback starts raw and transitions continuously to legal synchronization", [] {
       Fixture f;
       Controller c(f.config(true, true, [](Node &n) {

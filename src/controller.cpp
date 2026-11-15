@@ -752,6 +752,16 @@ JointValues Controller::joint_state(const Eigen::VectorXd &q,const Eigen::Vector
   const auto &locked=engine_->modules().solver().options().locked;
   JointValues out; for(const auto &j:joints_) { if(locked.test(std::size_t(j.idx_v))) continue; out.names.push_back(j.name);out.positions.push_back(take(model_->joint_position(q,j.id)));if(v)out.velocities.push_back((*v)[j.idx_v]); }return out;
 }
+JointValues Controller::joint_command() const {
+  const auto &s=snapshot(); const auto &locked=engine_->modules().solver().options().locked;
+  JointValues out;
+  for(std::size_t i=0;i<joints_.size();++i) {
+    const auto &j=joints_[i];
+    if(locked.test(std::size_t(j.idx_v)) || (feedback_ && !s.engine.groups[joint_group_[i]].attached)) continue;
+    out.names.push_back(j.name); out.positions.push_back(take(model_->joint_position(s.engine.command.q,j.id))); out.velocities.push_back(s.engine.command.v[j.idx_v]);
+  }
+  return out;
+}
 Node Controller::discovery() const {
   auto ms=Node::list(); for(const auto &m:metadata_) { auto ps=Node::list();for(const auto &p:m->ports())ps.append(port_info(p));
     ms.append(Node::map({{"id",m->id()},{"type",m->type()},{"homeable",m->homeable()},{"ports",ps}})); }
@@ -779,6 +789,8 @@ Node Controller::state() const {
   auto outcomes=Node::list(); const auto count=std::min(s.outcome_count,s.outcomes.size());
   for(std::size_t i=0;i<count;++i) {const auto &o=s.outcomes[(s.outcome_count-count+i)%s.outcomes.size()];
     outcomes.append(Node::map({{"request_id",double(o.sequence)},{"applied",o.applied},{"error",o.error.c_str()}}));}
-  return Node::map({{"schema_version",1},{"fresh",fresh},{"joints_attached",joints_attached},{"base_attached",base_attached},{"written",written},{"quality",quality},{"fault",fault},{"expired_modules",expired},{"modules",ms},{"outcomes",outcomes},{"cycles",double(s.engine.stats.cycles)},{"failed_cycles",double(s.engine.stats.failed_cycles)},{"engine_time",s.engine.stats.time},{"snapshot_stamp",s.stamp},{"generation",double(s.generation)},{"lifecycle",lifecycle_.load()},{"rejected_requests",double(rejected_.load())},{"submitted_inputs",double(coalesced_.load())},{"dropped_logs",double(logs_->dropped.load())},{"truncated_logs",double(logs_->truncated.load())}});
+  auto groups=Node::list();
+  for(const auto &g:s.engine.groups) groups.append(Node::map({{"name",g.name},{"fresh",g.fresh},{"attached",g.attached}}));
+  return Node::map({{"schema_version",1},{"fresh",fresh},{"joints_attached",joints_attached},{"base_attached",base_attached},{"groups",groups},{"written",written},{"quality",quality},{"fault",fault},{"expired_modules",expired},{"modules",ms},{"outcomes",outcomes},{"cycles",double(s.engine.stats.cycles)},{"failed_cycles",double(s.engine.stats.failed_cycles)},{"engine_time",s.engine.stats.time},{"snapshot_stamp",s.stamp},{"generation",double(s.generation)},{"lifecycle",lifecycle_.load()},{"rejected_requests",double(rejected_.load())},{"submitted_inputs",double(coalesced_.load())},{"dropped_logs",double(logs_->dropped.load())},{"truncated_logs",double(logs_->truncated.load())}});
 }
 } // namespace kstone_ros

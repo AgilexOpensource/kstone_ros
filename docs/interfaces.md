@@ -17,7 +17,7 @@ Names are private to the node: a node at `/left/kstone` resolves `~/state` to `/
 
 Driver outputs depend on real feedback, not a stale model initialization. Out-of-limit scalar synchronization uses actual Ruckig rather than an instantaneous position clip.
 
-- `~/feedback/joint_states` stays silent until fresh `~/joint_states` covers every unlocked joint. `~/feedback/cmd_vel` stays silent until fresh `~/odom` arrives.
+- `~/feedback/joint_states` carries only the joints whose feedback group is attached: it stays silent until fresh `~/joint_states` covers every unlocked joint of a group, and a group that goes stale (for example an unplugged hand in its own `feedback_groups` entry) drops out while the other groups keep publishing. `~/feedback/cmd_vel` stays silent until fresh `~/odom` arrives.
 - Attaching takes `feedback_timeout_s` of continuously fresh feedback. During this settling window, synchronization tracks latest raw measurement; suppressed unattached internal writes do not advance correction. The first attached command for the synchronizing group equals raw positions (mimics derived) with zero commanded velocity. Only subsequent attached writes advance continuous `JointTrajectory` with guard-scaled velocity and default acceleration/jerk factors 2/10, without restarting on every fresh sample. Independent engine groups retain their own attachment lifecycle; suppression by an external relay after attachment remains the separate forwarding boundary below.
 - Finite supported joint feedback is accepted and displayed unchanged even outside software position limits. Empty or unsupported-only names, mismatched lengths, duplicate names, NaN/Inf, invalid ages and out-of-order samples retain their rejection rules and atomicity. Modules driving/locking corrected joints stay enabled with constraints active, but their tasks and preparation are held and targets/FK/ramps rebase from current commanded state. Completion rebases affected modules to the legal posture. Unrelated modules/groups continue normally. In-range synchronization and command expiry rules remain unchanged; correction drops affected targets. Stale/reattach and generic pause/resume restart from latest raw feedback. Failed solve/guard/write cycles do not advance the profile; model limits are not relaxed.
 - Normal IK, gaze, CoM/collision recovery and null-space resume after correction without a new target/home, subject to existing arbitration. No motion-intent gate or new service is introduced; feasibility and ordinary module takeover acceleration/jerk are not guaranteed by the startup profile. See kstone's `docs/robot.md`.
@@ -87,7 +87,8 @@ ros2 service call /kstone/tool_pose/enable std_srvs/srv/SetBool "{data: false}"
 |---|---|
 | `fresh` | Every feedback group was within `feedback_timeout_s` in the last cycle |
 | `driver_io` | `false` while `~/driver_io` paused driver data exchange |
-| `joints_attached`, `base_attached` | Joint and chassis driver outputs are attached; `base_attached` is `false` without a free root |
+| `joints_attached`, `base_attached` | Every joint feedback group / the chassis is attached; `base_attached` is `false` without a free root |
+| `groups` | `[{name, fresh, attached}]` per engine feedback group, configured groups first, then `default` |
 | `written` | A safe command was written this cycle and the snapshot is not stale |
 | `quality` | `nominal`, or `degraded` when a stage held, was inexact or the step was clipped |
 | `fault` | Empty when healthy, otherwise a reason such as `driver_stale_feedback`, `held_or_stale`, `stopped`, `duration_complete` |

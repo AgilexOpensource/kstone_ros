@@ -456,11 +456,9 @@ private:
     }
     throw std::logic_error("missing typed module endpoint metadata");
   }
-  Joints joint_message(const Eigen::VectorXd &q,
-                       const Eigen::VectorXd *v = nullptr) {
+  Joints joint_message(JointValues values) {
     Joints m;
     m.header.stamp = get_clock()->now();
-    auto values = core_->joint_state(q, v);
     m.name = std::move(values.names);
     m.position = std::move(values.positions);
     m.velocity = std::move(values.velocities);
@@ -523,10 +521,12 @@ private:
         else if(record.level>=kstone::LogLevel::warn) RCLCPP_WARN(get_logger(),"%s: %s",record.component.c_str(),record.message.c_str());
         else RCLCPP_DEBUG(get_logger(),"%s: %s",record.component.c_str(),record.message.c_str());
       }
-      if (driver_io_ && safe && core_->joints_attached) {
-        const auto m = joint_message(core_->command_q(), &core_->velocity());
-        canonical_joint_command_pub_->publish(m);
-        if (joint_command_pub_) joint_command_pub_->publish(m);
+      if (driver_io_ && safe) {
+        const auto m = joint_message(core_->joint_command());
+        if (!m.name.empty()) {
+          canonical_joint_command_pub_->publish(m);
+          if (joint_command_pub_) joint_command_pub_->publish(m);
+        }
       }
       base_output(driver_io_ && core_->base_attached, safe ? core_->base_velocity() : kstone::Twist2D{});
       if (tf_) {
