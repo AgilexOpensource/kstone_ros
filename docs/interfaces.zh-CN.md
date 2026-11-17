@@ -22,7 +22,7 @@
 - 合法有限的受支持反馈原样接收和展示，包括越界位置。名称为空或全部不支持、长度不匹配、重复名称、NaN/Inf、非法时间年龄及乱序样本仍原子拒绝。驱动或锁定修正关节的模块保持启用和约束，但挂起任务及 prepare，目标/FK/轨迹从当前命令重新基准。完成后受影响模块从合法姿态重新基准；无关模块及反馈组正常继续。限位内同步及命令过期规则不变；越界修正丢弃受影响目标。过期重附着及通用暂停恢复从最新原始反馈重启。求解、守卫或写入失败不推进轨迹，也不放宽模型限位。
 - 修正后 IK、gaze、CoM/碰撞恢复及 null-space 无需新 target/home 即恢复，仍服从既有仲裁。不添加运动意图门控或新服务；启动轨迹不保证姿态可行，也不覆盖普通模块接管的加速度/jerk。参见 kstone 的 `docs/zh-CN/robot.md`。
 - **外部转发边界：** 转发器关闭时，机器人可能未运动而核心已完成修正。实际打开或重新打开时必须用新鲜反馈重同步，并协调首条成功的新命令。已有引擎 `set_paused(true)` 后 `set_paused(false)` 提供该生命周期；启用调试协议时用 `pause`，先 `paused: true` 再 `false`。不新增 ROS 服务。冷启动完成或附着不等于转发安全；guardian 门控及临时位置差检查保持不变，重新打开仍未验证。
-- 发布配置离线回归：运行 `test_controller` 时设置 `KSTONE_LOOKIE_CONFIG` 为发布 `kstone.yaml`，`KSTONE_LOOKIE_URDF` 为碰撞 URDF。核对相邻 `driver_joint_bridge.yaml` 的全部 32 个独立命令关节，验证启动/重附着首条原始引擎命令、原始实测 FK、逐周期位置变化及恢复速度/加速度/jerk 和实际完成。核心测试另外对比真实 Ruckig 输出，验证目标/FK 一致性、mimic、频率变化及失败回滚。只适配资源路径和实时权限，保留发布 gaze、CoM、碰撞、null-space 及锁定轮关节。
+- 覆盖性回归：`test_controller` 使用几何测试模型 `test/fixtures/coverage.yaml` / `coverage.urdf`，覆盖全部内置模块类型（chassis、frame_target、joint_target、null_space、gaze、center_of_mass、self_collision、world_collision）以及耦合 mimic、锁定轮关节和按模块划分的反馈组，不依赖任何机器人描述包。在关节超出限位时，验证启动/重附着首条原始引擎命令、原始实测 FK、逐周期位置变化及恢复速度/加速度/jerk 和实际完成，且各自动模块保持启用。核心测试另外对比真实 Ruckig 输出，验证目标/FK 一致性、mimic、频率变化及失败回滚。机器人包自行检查各自的发布配置（Lookie 由 lookie_bringup 核对驱动桥与 URDF）。
 - 关节和底盘各自独立接入。自由根是单独的引擎反馈组 `base`，除非 YAML 的 `feedback_groups` 另行安排。
 - 反馈过期达 `feedback_timeout_s` 时，对应输出断开：关节命令停止；`cmd_vel` 发送零速度持续一个 `command_timeout_s` 后停止。新鲜反馈到达后重新接入。
 - 没有反馈时引擎照常运行，没有空跑模式。无硬件测试时，用仿真器发布 `~/joint_states` 和 `~/odom`。

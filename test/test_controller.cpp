@@ -722,23 +722,29 @@ int main() {
       }
       check(!c.command_q().isApprox(clipped, 1e-9) && c.fault.empty(), "aggregate explicit target moves without replacing omitted clipped target");
     });
-    if (std::getenv("KSTONE_LOOKIE_CONFIG") && std::getenv("KSTONE_LOOKIE_URDF"))
-      test("Lookie deployed combination: 32 independent joints synchronize with first raw command and Ruckig", [] {
+    test("coverage stack: independent joints synchronize with first raw command and Ruckig", [] {
         Fixture f;
-        auto n = take(kstone::load_yaml(std::getenv("KSTONE_LOOKIE_CONFIG")));
-        const std::filesystem::path urdf = std::getenv("KSTONE_LOOKIE_URDF");
+        // Every built-in module type on a geometric fixture; no robot description package is needed.
+        const std::filesystem::path config = KSTONE_TEST_COVERAGE;
+        const auto urdf = config.parent_path() / "coverage.urdf";
+        auto n = take(kstone::load_yaml(config.string()));
         auto model = *n.find("model");
         model.set("file", urdf.string());
-        model.set("package_dirs", Node::list({urdf.parent_path().parent_path().parent_path().string()}));
         n.set("model", model);
         auto modules = *n.find("modules");
-        auto collision = *modules.find("self_collision");
-        collision.set("urdf", urdf.string());
-        modules.set("self_collision", collision);
+        std::set<std::string> types;
+        for (const auto &entry : modules.entries()) {
+          types.insert(entry.second.find("type")->as_string());
+          if (!entry.second.find("urdf")) continue;
+          auto module = entry.second;
+          module.set("urdf", urdf.string());
+          modules.set(entry.first, module);
+        }
+        check(types == std::set<std::string>{"center_of_mass", "chassis", "frame_target", "gaze", "joint_target",
+                                             "null_space", "self_collision", "world_collision"},
+              "the coverage fixture uses every built-in module type");
         n.set("modules", modules);
-        n.set("realtime", false);
-        n.set("thread", Node::map({{"priority", 0}, {"lock_memory", false}}));
-        const auto path = f.directory / "lookie.yaml";
+        const auto path = f.directory / "coverage.yaml";
         std::ofstream(path) << json(n);
         Controller c(path.string(), f.options());
         std::set<std::string> followers;
@@ -750,26 +756,21 @@ int main() {
           j.names.push_back(published.names[i]);
           j.positions.push_back(published.positions[i]);
         }
-        check(j.names.size() == 32, "actual model must expose 32 independent non-wheel joints");
-        const auto bridge_path = std::filesystem::path(std::getenv("KSTONE_LOOKIE_CONFIG")).parent_path() / "driver_joint_bridge.yaml";
-        const auto bridge = take(kstone::load_yaml(bridge_path.string()));
-        std::set<std::string> bridged;
-        for (const auto &module : bridge.find("modules")->items()) {
-          if (const auto *map = module.find("joint_map"))
-            for (const auto &entry : map->entries()) bridged.insert(entry.second.as_string());
-          else
-            for (const auto &name : module.find("joints")->items()) bridged.insert(name.as_string());
-        }
-        check(bridged == std::set<std::string>(j.names.begin(), j.names.end()), "independent command names must exactly match the actual driver bridge");
+        const std::set<std::string> expected{"torso_lift", "torso_pitch", "head_pan", "head_tilt",
+                                             "l_arm_joint1", "l_arm_joint2", "l_arm_joint3", "l_gripper",
+                                             "r_arm_joint1", "r_arm_joint2", "r_arm_joint3", "r_gripper"};
+        check(std::set<std::string>(j.names.begin(), j.names.end()) == expected,
+              "independent command joints exclude mimic followers and locked wheels");
         auto set_position = [&](const std::string &name, double value) {
           auto it = std::find(j.names.begin(), j.names.end(), name);
           check(it != j.names.end(), "missing independent joint " + name);
           j.positions[std::size_t(it - j.names.begin())] = value;
         };
-        set_position("head_joint1", 0.9466524124145508);
-        set_position("head_joint2", 0.0004828238452319056);
-        set_position("l_arm_joint4", 0.05398303376418461);
-        set_position("r_arm_joint4", -0.03719296635999916);
+        // head pan above and both elbows below their limits; head tilt in range
+        set_position("head_pan", 1.0466524124145508);
+        set_position("head_tilt", 0.0004828238452319056);
+        set_position("l_arm_joint3", 0.05398303376418461);
+        set_position("r_arm_joint3", -0.03719296635999916);
         const auto base = c.base_pose();
         auto feed = [&] {
           f.advance();
@@ -841,7 +842,7 @@ int main() {
               return;
             }
             ++suppressed;
-            for (const auto &name : {"head_joint1", "l_arm_joint4", "r_arm_joint4"}) {
+            for (const auto &name : {"head_pan", "l_arm_joint3", "r_arm_joint3"}) {
               const auto &joint = c.model()->joints()[take(c.model()->joint_id(name))];
               check(std::abs(c.command_q()[joint.idx_q] - c.measured()[joint.idx_q]) < 1e-12,
                     "suppressed settling writes cannot advance correction: " + std::string(name));
@@ -852,7 +853,7 @@ int main() {
         first_published();
         check_raw_fk();
         validate(initial);
-        check(enabled(c, "gaze") && enabled(c, "com") && enabled(c, "self_collision"), "automatic modules retain their enabled startup state");
+        check(enabled(c, "gaze") && enabled(c, "com") && enabled(c, "self_collision") && enabled(c, "world_collision"), "automatic modules retain their enabled startup state");
         auto previous_q = c.command_q().eval();
         auto previous_v = c.snapshot().engine.command.v.eval();
         Eigen::VectorXd previous_a = Eigen::VectorXd::Zero(previous_v.size());
@@ -863,21 +864,21 @@ int main() {
           for (const auto &name : j.names) {
             const auto &joint = c.model()->joints()[take(c.model()->joint_id(name))];
             const double limit = c.model()->velocity_limit()[joint.idx_v];
-            check(std::abs(c.command_q()[joint.idx_q] - previous_q[joint.idx_q]) <= limit * c.dt() + 1e-8, "real32 q velocity bound: " + name);
+            check(std::abs(c.command_q()[joint.idx_q] - previous_q[joint.idx_q]) <= limit * c.dt() + 1e-8, "q velocity bound: " + name);
             if (c.model()->has_position_limit(joint.id) &&
                 (previous_q[joint.idx_q] < c.model()->lower_position_limit()[joint.idx_q] - 1e-8 ||
                  previous_q[joint.idx_q] > c.model()->upper_position_limit()[joint.idx_q] + 1e-8)) {
-              check(std::abs(a[joint.idx_v]) <= 2 * limit + 1e-7, "real32 acceleration bound: " + name);
-              check(std::abs(a[joint.idx_v] - previous_a[joint.idx_v]) <= 20 * limit * c.dt() + 1e-6, "real32 jerk bound: " + name);
-              check(std::abs(c.command_q()[joint.idx_q] - initial[joint.idx_q]) <= std::abs(previous_q[joint.idx_q] - initial[joint.idx_q]) + 1e-8, "real32 monotonic resting recovery: " + name);
+              check(std::abs(a[joint.idx_v]) <= 2 * limit + 1e-7, "acceleration bound: " + name);
+              check(std::abs(a[joint.idx_v] - previous_a[joint.idx_v]) <= 20 * limit * c.dt() + 1e-6, "jerk bound: " + name);
+              check(std::abs(c.command_q()[joint.idx_q] - initial[joint.idx_q]) <= std::abs(previous_q[joint.idx_q] - initial[joint.idx_q]) + 1e-8, "monotonic resting recovery: " + name);
             }
           }
           previous_q = c.command_q(); previous_v = c.snapshot().engine.command.v; previous_a = a;
         }
-        check(bool(c.model()->check_position_limits(c.command_q())), "real32 transition completes in unchanged model limits");
-        check(c.joints_attached && c.base_attached && c.written, "real configuration attaches offline");
+        check(bool(c.model()->check_position_limits(c.command_q())), "transition completes in unchanged model limits");
+        check(c.joints_attached && c.base_attached && c.written, "configuration attaches offline");
         check(max_command_delta > 1e-8, "synchronization must progress without a fresh target");
-        c.joint_targets({"head_joint1"}, {0.85});
+        c.joint_targets({"head_pan"}, {0.85});
         const auto before = c.command_q().eval();
         for (int k = 0; k < 10; ++k) {
           const auto previous = c.command_q().eval();
@@ -893,15 +894,15 @@ int main() {
             j.positions[i] = command.positions[std::size_t(it - command.names.begin())];
           }
         }
-        const auto head = take(c.model()->joint_id("head_joint1"));
+        const auto head = take(c.model()->joint_id("head_pan"));
         check(std::abs(take(c.model()->joint_position(c.command_q(), head)) - 0.85) < std::abs(take(c.model()->joint_position(before, head)) - 0.85), "explicit valid target progresses toward the requested in-limit position");
         c.write("chassis", "velocity", vector({0, 0, 0}));
         feed();
         for (int k = 0; k < 20; ++k) { f.advance(); c.feedback_base(base); cycle(c); }
         check(!c.joints_attached, "joint feedback loss detaches");
-        set_position("head_joint1", 0.97);
-        set_position("l_arm_joint4", 0.08217);
-        set_position("r_arm_joint4", -0.00487);
+        set_position("head_pan", 1.07);
+        set_position("l_arm_joint3", 0.08217);
+        set_position("r_arm_joint3", -0.00487);
         const auto reattached = clipped_seed(c, raw_seed());
         first_published();
         check_raw_fk();
@@ -913,10 +914,10 @@ int main() {
         }
         check(enabled(c, "gaze") && enabled(c, "com") && enabled(c, "self_collision"), "reattach does not disable automatic modules pending a fresh target");
         for (std::size_t i = 0; i < c.modules().size(); ++i)
-          if (c.modules()[i]->id() == "com" || c.modules()[i]->id() == "self_collision")
+          if (c.modules()[i]->id() == "com" || c.modules()[i]->id() == "self_collision" || c.modules()[i]->id() == "world_collision")
             check(c.snapshot().engine.modules[i].running, "reattached protection runs without a fresh target");
         check(c.joints_attached && c.written, "reattach resumes clipped commands and normal automatic IK");
-        std::cout << "Lookie independent_joints=32 max_command_delta=" << max_command_delta << '\n';
+        std::cout << "coverage independent_joints=" << j.names.size() << " max_command_delta=" << max_command_delta << '\n';
       });
     test("continuous feedback coordinates",
          [] {

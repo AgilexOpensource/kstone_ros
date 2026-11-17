@@ -38,7 +38,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_test REQUIRED)
   add_executable(test_controller test/test_controller.cpp)
   target_link_libraries(test_controller PRIVATE kstone_ros_controller)
-  target_compile_definitions(test_controller PRIVATE KSTONE_TEST_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config/omni.yaml")
+  target_compile_definitions(test_controller PRIVATE KSTONE_TEST_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/config/omni.yaml"
+    KSTONE_TEST_COVERAGE="${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/coverage.yaml")
   ament_add_test(controller COMMAND "$<TARGET_FILE:test_controller>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO TIMEOUT 90)
   set(blackbox_env "KSTONE_ROS_EXECUTABLE=$<TARGET_FILE:kstone_node>"

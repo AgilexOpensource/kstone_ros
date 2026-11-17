@@ -1,0 +1,170 @@
+# Coverage configuration for kstone_ros tests: every built-in module type at least once, with
+# varied options, on the geometric coverage.urdf. It is not modelled on any particular robot.
+# test_controller rewrites model.file and every urdf field to the absolute fixture path.
+model:
+  file: coverage.urdf
+  root: free_flyer
+  mimic: coupled                      # *_gripper_mimic follows *_gripper
+  locked_joints: [wheel_joint0, wheel_joint1, wheel_joint2]
+  joint_limits:
+    position:
+      lower: {torso_pitch: -0.2}      # tighter than the URDF
+rate_hz: 50
+feedback_timeout_s: 0.25
+feedback_groups:                      # names and fnmatch patterns; no "default" group remains
+  - {name: torso, joints: ["torso_*"]}
+  - {name: head, joints: [head_pan, head_tilt]}
+  - {name: left_arm, joints: ["l_arm_joint*"]}
+  - {name: right_arm, joints: ["r_arm_joint*"]}
+  - {name: left_gripper, joints: [l_gripper]}
+  - {name: right_gripper, joints: [r_gripper]}
+realtime: false
+thread: {priority: 0, lock_memory: false}
+safety:
+  mode: reject
+solver:
+  mode: layered_independent
+  damping: 0.001
+robot:
+  type: loopback
+  initial:
+    torso_lift: 0.15
+    torso_pitch: 0.1
+    l_arm_joint1: -0.3
+    l_arm_joint2: 0.3
+    l_arm_joint3: 1.2
+    r_arm_joint1: -0.3
+    r_arm_joint2: -0.3
+    r_arm_joint3: 1.2
+modules:
+  chassis:
+    type: chassis
+    chassis:
+      kinematics: omni
+      base_frame: base_link
+      command_timeout_s: 0.25
+      max_linear_velocity: 0.5
+      max_lateral_velocity: 0.4
+      max_angular_velocity: 1.0
+      max_linear_acceleration: 1.0
+      max_linear_deceleration: 1.2
+      max_lateral_acceleration: 0.8
+      max_lateral_deceleration: 0.8
+      max_angular_acceleration: 2.0
+      max_angular_deceleration: 2.0
+      target_position_deadband: 0.02
+      target_orientation_deadband: 0.03
+  # frame_target: full position/orientation profile, partial axis weights, world axes
+  torso_pose:
+    type: frame_target
+    frame: chest_link
+    joints: [torso_lift, torso_pitch]
+    reference: base_link
+    position_weight: [0, 0, 5]
+    orientation_weight: [0, 1, 0]
+    world_axes: true
+    task: {level: 0}
+    home_motion: {velocity_scale: 0.5, timeout_s: 2.0}
+    trajectory:
+      position: {velocity: 0.1, acceleration: 0.3, deceleration: 0.3, reversal_deceleration: 0.6, jerk: 3.0}
+      orientation: {velocity: 0.8, acceleration: 2.0, deceleration: 2.0, reversal_deceleration: 4.0, jerk: 20.0}
+  # frame_target: velocity cap only, with a lead limit
+  left_arm_pose:
+    type: frame_target
+    frame: l_tool
+    joints: [l_arm_joint1, l_arm_joint2, l_arm_joint3]
+    reference: base_link
+    weight: 5
+    orientation_weight: [0, 0, 0]
+    lm_damping: 0.1
+    task: {level: 1}
+    trajectory:
+      lead_speed_scale: 3.0
+      position: {velocity: 0.5}
+      orientation: {}
+  # frame_target: no trajectory shaping
+  right_arm_pose:
+    type: frame_target
+    frame: r_tool
+    joints: [r_arm_joint1, r_arm_joint2, r_arm_joint3]
+    reference: base_link
+    orientation_weight: [0, 0, 0]
+    task: {level: 1}
+    trajectory: {position: {}, orientation: {}}
+  # null_space: both preferences
+  left_arm_null:
+    type: null_space
+    primary: left_arm_pose
+    preference: manipulability
+    manipulability_rate: 1.0
+    manipulability_weight: 0.1
+    task: {level: 1}
+  right_arm_null:
+    type: null_space
+    primary: right_arm_pose
+    preference: posture
+    posture_weight: 0.1
+    task: {level: 1}
+  # joint_target: claim on idle with Home, plain, and direct trigger
+  torso_joint:
+    type: joint_target
+    joints: [torso_lift, torso_pitch]
+    home_motion: {velocity_scale: 0.5, timeout_s: 2.0}
+    on_idle: claim
+    release_after_s: 0.25
+  arm_joints:
+    type: joint_target
+    joints: [l_arm_joint1, l_arm_joint2, l_arm_joint3, r_arm_joint1, r_arm_joint2, r_arm_joint3]
+    trajectory: {velocity_scale: 0.5}
+    task: {level: 1}
+  head_joint:
+    type: joint_target
+    joints: [head_pan, head_tilt]
+    on_idle: claim
+    release_after_s: 0.25
+  gripper_joint:
+    type: joint_target
+    joints: [l_gripper, r_gripper]   # followers are coupled mimics
+    trajectory: {trigger: direct}
+    task: {level: 1}
+  gaze:
+    type: gaze
+    frame: head_link
+    joints: [head_pan, head_tilt]
+    frames: [l_tool, r_tool]
+    max_velocity: 1.5
+    target_idle_s: 5.0
+  com:
+    type: center_of_mass
+    frame: base_link
+    polygon: [[0.3, 0.25], [-0.3, 0.25], [-0.3, -0.25], [0.3, -0.25]]
+    margin: 0.05
+    recovery_tasks: [torso_pose]
+    closed_loop: false
+    payloads:
+      - {frame: l_tool, mass: 0.5}
+      - {frame: r_tool, mass: 0.5}
+  self_collision:
+    type: self_collision
+    urdf: coverage.urdf
+    groups:
+      - {name: left_arm, joint_prefixes: [l_]}
+      - {name: right_arm, joint_prefixes: [r_]}
+    exclude_subtrees:
+      - [l_tool, r_tool]
+    exclude_initial_collisions: true
+    closed_loop: false
+    constraint: {clearance: 0.01, activation_margin: 0.01, hysteresis: 0.005, gain: 1.5}
+  world_collision:
+    type: world_collision
+    urdf: coverage.urdf
+    velocity_timeout_s: 0.2
+    obstacles:
+      - name: wall                    # far from the reachable workspace
+        shape: {type: box, size: [0.1, 4.0, 2.0]}
+        pose: {position: [3.0, 0, 1.0]}
+      - name: table                   # disabled until enabled at run time
+        shape: {type: box, size: [0.6, 1.0, 0.05]}
+        pose: {position: [0.9, 0, 0.75]}
+        enabled: false
+    constraint: {clearance: 0.02, activation_margin: 0.02, hysteresis: 0.005, gain: 1.5}
