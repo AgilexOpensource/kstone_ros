@@ -8,6 +8,7 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def launch_node(context):
+    """Build the kstone_node action; ``realtime`` and ``debug_port`` are passed only when not ``inherit``."""
     realtime = LaunchConfiguration("realtime").perform(context).lower()
     if realtime not in ("inherit", "true", "false"):
         raise ValueError("realtime must be inherit, true or false")
@@ -28,6 +29,7 @@ def launch_node(context):
 
 
 def generate_launch_description():
+    """Declare the launch arguments and start kstone_node."""
     share = FindPackageShare("kstone_ros")
     return LaunchDescription([
         DeclareLaunchArgument("config_file", default_value=PathJoinSubstitution([share, "config", "omni.yaml"])),

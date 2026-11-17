@@ -14,40 +14,58 @@
 
 namespace kstone_ros {
 using Node = kstone::ConfigNode;
+/// Serialize a config node as compact JSON.
 std::string json(const Node &value);
+/// Parse JSON text into a config node; throws on invalid JSON.
 Node parse_json(const std::string &text);
+/// Throw std::runtime_error with the status message when `status` is an error.
 void require(kstone::Status status);
+/// Throw std::invalid_argument unless `value` fits `info`: a rigid pose, or finite numbers of the port size.
 void validate_port(const kstone::PortInfo &info,
                    const kstone::PortValue &value);
-// Out-of-bounds values are accepted; the owning module limits them. Fixed axes (lower == upper) are not checked.
+/// True when a number/vector value lies inside the port bounds; other port types always pass.
+/// Out-of-bounds values are accepted; the owning module limits them. Fixed axes (lower == upper) are not checked.
 bool within_bounds(const kstone::PortInfo &info, const kstone::PortValue &value);
+/// Return the value of `result`, or throw std::runtime_error with its error message.
 template <class T> T take(kstone::Result<T> result) {
   if (!result)
     throw std::runtime_error(result.error().message);
   return std::move(result).value();
 }
+/// Encode a pose as {"position": [x, y, z], "orientation": [w, x, y, z]}.
 Node pose_node(const Eigen::Isometry3d &pose);
+/// Build a pose from xyz and a wxyz quaternion (normalized); throws on wrong sizes, non-finite or zero values.
 Eigen::Isometry3d make_pose(const std::vector<double> &translation,
                             const std::vector<double> &wxyz);
+/// Controller construction options; the ROS node fills them from its parameters.
 struct Options {
+  /// Expected chassis module ID; when set it must name the root-owning chassis module.
   std::string chassis_module;
+  /// Variables substituted into the kstone YAML configuration.
   std::map<std::string, std::string> variables;
+  /// Maximum age (s) of a motion command at application, and of joint/base feedback; both > 0.
   double command_timeout_s{0.5}, feedback_timeout_s{0.25};
+  /// Engine run time (s); 0 runs until stop().
   double duration_s{0};
+  /// Overrides the configuration's `realtime` setting when set.
   std::optional<bool> realtime;
+  /// Clock for the engine and logs; null uses the kstone default clock.
   std::shared_ptr<const kstone::Clock> clock;
-  // Driver injection for embedding/tests; not a ROS parameter.
+  /// Driver injection for embedding/tests; not a ROS parameter. Null uses ROS joint/base feedback.
   std::shared_ptr<kstone::RobotInterface> robot;
+  /// Starts the kstone debug server when set.
   std::optional<kstone::DebugServerOptions> debug;
 };
+/// Joint names with matching positions and (optionally) velocities.
 struct JointValues {
   std::vector<std::string> names;
   std::vector<double> positions, velocities;
 };
+/// True for module types whose ports the ROS node exposes as topics and services.
 inline bool supported_ros_module(std::string_view type) {
   return type=="frame_target" || type=="chassis" || type=="joint_target";
 }
-// Immutable discovery metadata; no Module pointers escape the engine owner.
+/// Immutable discovery metadata; no Module pointers escape the engine owner.
 struct ModuleInfo {
   std::string module_id, module_type;
   bool can_home{}, chassis_omni{};
@@ -59,11 +77,13 @@ struct ModuleInfo {
   bool homeable() const { return can_home; }
   const auto &ports() const { return inputs; }
 };
+/// Result of one request, identified by the sequence number its submitting call returned.
 struct Outcome {
   std::uint64_t sequence{};
   bool applied{};
-  Text<192> error;
+  Text<192> error;  ///< Rejection reason; empty when applied.
 };
+/// State the owner thread publishes after each cycle; read it with Controller::snapshot() after poll().
 struct Snapshot {
   kstone::EngineSnapshot engine;
   Eigen::VectorXd q;
@@ -81,58 +101,103 @@ struct Snapshot {
   kstone::Twist2D base_velocity;
   Eigen::Isometry3d chassis_pose{Eigen::Isometry3d::Identity()};
 };
+/// Runs a kstone Engine on its own owner thread and exchanges requests, feedback and snapshots with one
+/// ROS thread through lock-free queues. Request methods return a sequence number whose result appears in
+/// Snapshot::outcomes; they throw std::invalid_argument for bad input and std::runtime_error after the owner
+/// has stopped or failed, or when the request queue is full.
 class Controller {
 public:
+  /// Load the kstone YAML `file` and build the engine; throws on an invalid configuration or options.
   Controller(const std::string &file, Options options = {});
+  /// Stops the owner thread.
   ~Controller();
   Controller(const Controller &) = delete;
   Controller &operator=(const Controller &) = delete;
+  /// Start the owner thread; throws std::logic_error when called twice or after stop().
   void start();
+  /// Stop the owner thread and the debug server; safe to call repeatedly.
   void stop() noexcept;
-  // Single serialized ROS producer/consumer. Never calls Engine::step.
+  /// Take the newest snapshot and refresh the public status fields; returns `written`.
+  /// Single serialized ROS producer/consumer. Never calls Engine::step.
   bool poll();
   const auto &model() const { return model_; }
+  /// Metadata of every configured module, in configuration order.
   const auto &modules() const { return metadata_; }
+  /// Input port `name` of module `id`; throws std::invalid_argument when unknown.
   const kstone::PortInfo &port(const std::string &, const std::string &) const;
+  /// Last value the owner accepted on input port `name` of module `id`.
   kstone::PortValue read(const std::string &, const std::string &) const;
+  /// Submit a value for an input port. Newer writes to the same port replace pending ones.
   std::uint64_t write(const std::string &, const std::string &, const kstone::PortValue &);
+  /// Enable or disable module `id`. Enabling a module that still needs a new command arms it instead: it starts
+  /// on its next accepted target, so a pre-fault target is never resumed.
   std::uint64_t enable(const std::string &, bool);
+  /// Start homing module `id`; throws std::invalid_argument when it cannot home.
   std::uint64_t home(const std::string &);
+  /// Set the `target` port of module `id` to its current frame pose.
   std::uint64_t reset_target(const std::string &);
+  /// Home every enabled homeable module (including ones stopped by a fault) and zero the chassis velocity.
   std::uint64_t reset_home();
+  /// Clear a latched fault. Motion modules are stopped and requests submitted before it are discarded; a module
+  /// stopped this way resumes on its next accepted target.
   std::uint64_t recover();
-  // Names outside every joint_target chain are skipped and, if given, appended to ignored.
+  /// Submit joint targets routed to the joint_target modules owning each joint.
+  /// Names outside every joint_target chain are skipped and, if given, appended to ignored.
+  /// Requests submitted within one owner cycle are applied in order, each atomically with its own outcome;
+  /// a later request only supersedes the joints it names.
   std::uint64_t joint_targets(const std::vector<std::string> &, const std::vector<double> &, std::vector<std::string> *ignored = nullptr);
+  /// Submit measured joint positions sampled `age_s` seconds ago (at most feedback_timeout_s).
   std::uint64_t feedback_joints(const std::vector<std::string> &, const std::vector<double> &, double age_s = 0);
+  /// Submit the measured root pose sampled `age_s` seconds ago; needs a free root.
   std::uint64_t feedback_base(const Eigen::Isometry3d &, double age_s = 0);
-  // Chassis control-center pose (center_in_root applied), as chassis drivers report odometry.
+  /// Chassis control-center pose (center_in_root applied), as chassis drivers report odometry.
   std::uint64_t feedback_center(const Eigen::Isometry3d &, double age_s = 0);
+  /// Engine cycle period (s) of the newest snapshot.
   double dt() const { return snapshot().dt; }
+  /// Current time (s) of the controller clock.
   double now() const;
+  /// ID of the chassis module, empty without one.
   const auto &chassis() const { return chassis_id_; }
+  /// Bound debug server port, or 0 when the debug server is off.
   int debug_port() const { return debug_ ? debug_->port() : 0; }
+  /// True when the model has a free-floating root joint.
   bool has_root() const { return root_ != nullptr; }
   bool has_joints() const { return !joints_.empty(); }
+  /// Model configuration of the newest snapshot.
   const auto &q() const { return snapshots_.read().q; }
+  /// Measured configuration of the newest snapshot.
   const auto &measured() const { return snapshots_.read().engine.state.q; }
+  /// Commanded configuration and velocity of the newest snapshot.
   const auto &command_q() const { return snapshots_.read().engine.command.q; }
   const auto &velocity() const { return snapshots_.read().engine.command.v; }
+  /// Current pose of the frame behind pose input `name` of module `id`, in the port's reference frame.
   Eigen::Isometry3d pose(const std::string &, const std::string &) const;
+  /// Configured home pose of pose input `name` of module `id`; throws std::out_of_range when none.
   Eigen::Isometry3d home_pose(const std::string &, const std::string &) const;
+  /// Root pose in the newest snapshot configuration.
   Eigen::Isometry3d base_pose() const;
+  /// Chassis pose reported by the chassis module.
   Eigen::Isometry3d chassis_pose() const { return snapshot().chassis_pose; }
+  /// Chassis velocity command; zero unless the last poll() returned true.
   kstone::Twist2D base_velocity() const;
+  /// Positions (and velocities when `v` is given) of all unlocked joints in configuration `q`.
   JointValues joint_state(const Eigen::VectorXd &, const Eigen::VectorXd * = nullptr) const;
-  // Last command of the joints whose feedback group is attached; a detached group (e.g. an unplugged hand)
-  // gets no output while the other groups keep running.
+  /// Last command of the joints whose feedback group is attached; a detached group (e.g. an unplugged hand)
+  /// gets no output while the other groups keep running.
   JointValues joint_command() const;
+  /// Module and port description published on the `discover` topic.
   Node discovery() const;
+  /// Status document published on the `state` topic (modules, groups, outcomes, counters).
   Node state() const;
+  /// Newest snapshot taken by poll().
   const Snapshot &snapshot() const { return snapshots_.read(); }
+  /// Engine and driver log records, drained by the ROS thread.
   const auto &logs() const { return logs_; }
+  /// Set by poll(): `written` = the newest snapshot holds a safe, recent command; `fresh` = engine feedback is fresh.
   bool written{}, fresh{};
-  // Driver output gates: fresh feedback has been synced into the model.
+  /// Driver output gates: fresh feedback has been synced into the model.
   bool joints_attached{}, base_attached{};
+  /// Set by poll(): latched fault reason (empty when healthy) and solve quality.
   std::string fault, quality{"uninitialized"};
 private:
   enum class Operation { enable, home, reset_target, reset_home, recover };
