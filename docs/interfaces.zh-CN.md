@@ -145,7 +145,9 @@ ros2 service call /kstone/tool_pose/enable std_srvs/srv/SetBool "{data: false}"
 | `debug_host` | `127.0.0.1` | DebugServer 监听地址 |
 | `debug_token` | 空 | DebugServer 令牌；为空时使用 `$KSTONE_TOKEN` |
 
-- 过旧或来自未来的反馈与命令时间戳被拒绝。时间戳为零时使用接收时间。
+- 反馈时间戳早于 `feedback_timeout_s` 或来自未来时被拒绝。
+- 命令时间戳（`~/control/joint`、`M/control/pose`）按话题检查连续性，不与节点时钟比较，因此可回放录制的 bag，也接受其他时钟的发布者。第一条消息、或静默超过 `command_timeout_s` 后的第一条消息记为参考。之后的消息若时间戳回退，或时间戳的推进与距参考的实际经过时间相差超过 `command_timeout_s`（传输延迟、积压、时钟跳变），则被拒绝，同时丢弃参考，下一条消息重新记为参考。每个命令话题只应有一个发布者。
+- 时间戳为零时使用接收时间。
 - YAML 中更小的正端口超时会缩短 `command_timeout_s`。
 - 设置 `center_frame` 后，`child_frame_id` 为该值的 `~/odom` 消息按底盘 YAML 的 `center_in_root` 转换；child 为 `base_frame` 的消息仍作为根位姿。
 - 底盘机体坐标系是底盘模块 YAML 中的 `base_frame`。

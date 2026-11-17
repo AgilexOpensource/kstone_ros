@@ -419,18 +419,13 @@ def test_dds_root_tf_and_invalid_pose_rejection(start_node, probe, tmp_path, no_
     assert_no_legacy_driver_topics(bridge, discovery[-1], probe)
     assert any(t.header.frame_id == "world" and t.child_frame_id == "base_link"
                for msg in transforms for t in msg.transforms)
-    # Neither a stale stamped target nor an unrelated frame is accepted.
+    # A target in an unrelated frame is not accepted (stamp continuity: test_command_stamp_continuity).
     submitted = states[-1]["submitted_inputs"]
-    for invalid in ("stale", "frame"):
-        target = target_message()
-        if invalid == "stale":
-            target.header.stamp = probe.node.get_clock().now().to_msg()
-            target.header.stamp.sec -= 5
-        else:
-            target.header.frame_id = "unrelated_frame"
-        publisher.publish(target)
-        probe.spin_for(bridge, 0.25)
-        assert states[-1]["submitted_inputs"] == submitted
+    target = target_message()
+    target.header.frame_id = "unrelated_frame"
+    publisher.publish(target)
+    probe.spin_for(bridge, 0.25)
+    assert states[-1]["submitted_inputs"] == submitted
     target = target_message()
     target.header.stamp = probe.node.get_clock().now().to_msg()
     publisher.publish(target)
@@ -692,8 +687,7 @@ def test_typed_current_fk_and_named_joint_input_without_joint_telemetry(start_no
     sensing.publish(measured)
     probe.spin_for(bridge, 0.3)
     submitted = states[-1]["submitted_inputs"]
-    for invalid in ("empty", "duplicate", "mismatch", "extra_position", "nan", "inf",
-                    "frame", "stale", "future"):
+    for invalid in ("empty", "duplicate", "mismatch", "extra_position", "nan", "inf", "frame"):
         message = JointState(name=["slide_x", "finger_joint", "slide_y"], position=[0.07, 0.02, 0.05])
         if invalid == "empty":
             message.name = []
@@ -707,9 +701,6 @@ def test_typed_current_fk_and_named_joint_input_without_joint_telemetry(start_no
             message.position[-1] = float(invalid)
         elif invalid == "frame":
             message.header.frame_id = "base_link"
-        else:
-            message.header.stamp = probe.node.get_clock().now().to_msg()
-            message.header.stamp.sec += 5 if invalid == "future" else -5
         sensing.publish(measured)
         joint.publish(message)
         probe.spin_for(bridge, 0.08)
@@ -781,7 +772,7 @@ def test_typed_chassis_planar_pose_validation_and_differential_twist_only(start_
     before = states[-1]["modules"]["rolling_base"]["ports"]["pose_target"]
     if kinematics == "omni":
         probe.wait(bridge, lambda: target.get_subscription_count())
-        for invalid in ["z", "tilt", "frame", "stale", "future", "nan", "zero_quaternion", "nan_quaternion"]:
+        for invalid in ["z", "tilt", "frame", "nan", "zero_quaternion", "nan_quaternion"]:
             message = PoseStamped()
             message.header.frame_id = "world"
             message.pose.position.x = 0.08
@@ -792,9 +783,6 @@ def test_typed_chassis_planar_pose_validation_and_differential_twist_only(start_
                 message.pose.orientation.x = 0.1
             elif invalid == "frame":
                 message.header.frame_id = "body_center"
-            elif invalid in ("stale", "future"):
-                message.header.stamp = probe.node.get_clock().now().to_msg()
-                message.header.stamp.sec += 5 if invalid == "future" else -5
             elif invalid == "nan":
                 message.pose.position.x = float("nan")
             elif invalid == "zero_quaternion":
@@ -890,7 +878,7 @@ def test_aggregate_joint_targets_routing_validation_order_and_lease(start_node, 
     accept(aggregate, ["slide_x", "slide_z"], [0.11, 0.3], ([0.02, 0.11], [0.05]))
     accept(aggregate, ["slide_x", ""], [0.12, 0.0], ([0.02, 0.12], [0.05]))
     submitted = states[-1]["submitted_inputs"]
-    for invalid in ("empty", "duplicate", "mismatch", "nan", "inf", "frame", "stale", "future"):
+    for invalid in ("empty", "duplicate", "mismatch", "nan", "inf", "frame"):
         message = JointState(name=["finger_joint", "slide_x", "slide_y"], position=[0.03, 0.07, 0.06])
         if invalid == "empty":
             message.name = []; message.position = []
@@ -902,9 +890,6 @@ def test_aggregate_joint_targets_routing_validation_order_and_lease(start_node, 
             message.position[-1] = float(invalid)
         elif invalid == "frame":
             message.header.frame_id = "base_link"
-        else:
-            message.header.stamp = probe.node.get_clock().now().to_msg()
-            message.header.stamp.sec += 5 if invalid == "future" else -5
         aggregate.publish(message)
         probe.spin_for(bridge, 0.08)
         assert values()[0] == pytest.approx([0.02, 0.12]), invalid
@@ -1056,3 +1041,66 @@ def test_module_cmd_vel_bare_type_validation_and_receipt_lease(start_node, probe
     probe.wait(bridge, saturated)
     assert controls[-1].linear.x <= 0.3 + 1e-9 and controls[-1].angular.z >= -0.8 - 1e-9
     assert states[-1]["modules"]["mobile_platform"]["enabled"]
+
+
+def test_command_stamp_continuity(start_node, probe, tmp_path):
+    """Command stamps are judged against a per-topic reference, not the node clock."""
+    path = config_variant(tmp_path, fixed=True, no_chassis=True)
+    config = yaml.safe_load(path.read_text())
+    config["modules"]["arm_joint"] = dict(config["modules"].pop("gripper_joint"), joints=["slide_y"])
+    path.write_text(yaml.safe_dump(config))
+    bridge = start_node(config_file=str(path), topic_prefix="~", _namespace="/stamps",
+                        command_timeout_s=0.3, state_rate_hz=60.0)
+    states = probe.subscribe_json(bridge.topic("state"))
+    joint = probe.node.create_publisher(JointState, bridge.topic("control/joint"), 10)
+    probe.wait(bridge, lambda: states and joint.get_subscription_count())
+    value = [0.0]
+
+    def target():
+        return states[-1]["modules"]["arm_joint"]["ports"]["target"][0]
+
+    def send(stamp_ns, position):
+        message = JointState(name=["slide_y"], position=[position])
+        message.header.stamp.sec, message.header.stamp.nanosec = divmod(int(stamp_ns), 1_000_000_000)
+        joint.publish(message)
+        probe.spin_for(bridge, 0.05)
+
+    def now_ns():
+        return probe.node.get_clock().now().nanoseconds
+
+    def stream(offset_ns, count, start):
+        # Stamps keep pace with arrival, as from a recorded bag or a publisher on another clock.
+        for k in range(count):
+            send(now_ns() + offset_ns, start + 0.001 * k)
+        value[0] = start + 0.001 * (count - 1)
+        probe.wait(bridge, lambda: target() == pytest.approx(value[0]))
+
+    def rejected(stamp_ns, position):
+        send(stamp_ns, position)
+        probe.spin_for(bridge, 0.1)
+        assert target() == pytest.approx(value[0])
+
+    replay = -100 * 1_000_000_000          # recorded 100 s ago
+    stream(replay, 8, 0.01)
+    last = now_ns() + replay
+    rejected(last - 200_000_000, 0.09)     # went backwards
+    stream(replay, 4, 0.02)                # the next message is a new reference
+    rejected(now_ns() + replay + 2_000_000_000, 0.09)  # ran 2 s ahead of its arrival
+    stream(replay, 4, 0.03)
+
+    # A backlog: stamps stop advancing while messages keep arriving. Once 0.3 s behind, one message
+    # is rejected and the next starts a new reference.
+    frozen = now_ns() + replay
+    applied = []
+    for k in range(12):
+        send(frozen, 0.04 + 0.001 * k)
+        applied.append(target() == pytest.approx(0.04 + 0.001 * k))
+    assert applied[:5] == [True] * 5 and not all(applied) and applied[-1]
+    stream(replay, 4, 0.05)
+
+    # After silence any stamp starts a new reference; a zero stamp always uses the reception time.
+    probe.spin_for(bridge, 0.5)
+    stream(-1000 * 1_000_000_000, 4, 0.06)
+    send(0, 0.07)
+    value[0] = 0.07
+    probe.wait(bridge, lambda: target() == pytest.approx(0.07))

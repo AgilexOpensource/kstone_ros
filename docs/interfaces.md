@@ -145,7 +145,9 @@ All parameters are read at startup. Defaults are in [bridge.yaml](../config/brid
 | `debug_host` | `127.0.0.1` | DebugServer listen address |
 | `debug_token` | empty | DebugServer token; empty falls back to `$KSTONE_TOKEN` |
 
-- Feedback and command stamps that are too old or in the future are rejected. A zero stamp uses the reception time.
+- Feedback stamps older than `feedback_timeout_s` or in the future are rejected.
+- Command stamps (`~/control/joint`, `M/control/pose`) are checked for continuity per topic, not against the node clock, so recorded bags and publishers on another clock are accepted. The first message, or the first after `command_timeout_s` of silence, sets a reference. A later message is rejected when its stamp goes backwards or its stamp advance differs from the time since the reference by more than `command_timeout_s` (delayed in transit, a backlog, a clock jump); the reference is then dropped and the next message sets a new one. Use one publisher per command topic.
+- A zero stamp uses the reception time.
 - `command_timeout_s` is shortened by a smaller positive port timeout from the YAML.
 - With `center_frame` set, `~/odom` messages with that `child_frame_id` are converted with the chassis YAML `center_in_root`; messages with `base_frame` as child stay root poses.
 - The chassis body frame is the chassis module's YAML `base_frame`.

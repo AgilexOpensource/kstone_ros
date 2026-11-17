@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <map>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
@@ -120,7 +121,7 @@ public:
           const bool center = !center_.empty() && msg.child_frame_id == center_;
           if (!center && !msg.child_frame_id.empty() && msg.child_frame_id != base_) throw std::invalid_argument("unexpected odometry child frame");
           Pose p; p.header=msg.header; p.pose=msg.pose.pose;
-          const auto pose = pose_input(p, world_, false); const double a = feedback_age(p.header);
+          const auto pose = pose_input(p, world_); const double a = feedback_age(p.header);
           if (center) core_->feedback_center(pose, a); else core_->feedback_base(pose, a);
         }, rclcpp::SensorDataQoS());
       if (!feedback_base.empty() && core_->has_root())
@@ -128,7 +129,7 @@ public:
             feedback_base,
             [this](const Pose &m) {
               if (!driver_io_) return;
-              core_->feedback_base(pose_input(m, world_, false),
+              core_->feedback_base(pose_input(m, world_),
                                    feedback_age(m.header));
             },
             rclcpp::SensorDataQoS());
@@ -145,8 +146,8 @@ public:
       });
       if (m->type() == "frame_target") {
         const auto endpoint=topic(id+"/control/pose");
-        subscribe<Pose>(endpoint,[this,id](const Pose &msg) {
-          kstone::PortValue value; value.pose=pose_input(msg,port_frame(id,"target"));
+        subscribe<Pose>(endpoint,[this,id,endpoint](const Pose &msg) {
+          kstone::PortValue value; value.pose=pose_input(msg,port_frame(id,"target"),endpoint);
           core_->write(id,"target",value);
         });
         module_interface(id,endpoint,"subscribe","command","target",port_frame(id,"target"));
@@ -162,8 +163,8 @@ public:
         module_interface(id,endpoint,"subscribe","command","velocity",frame_prefix_+m->chassis_frame);
         if(m->chassis_omni) {
           const auto pose_endpoint=topic(id+"/control/pose");
-          subscribe<Pose>(pose_endpoint,[this,id](const Pose &msg) {
-            const auto p=pose_input(msg,world_); const auto &r=p.linear();
+          subscribe<Pose>(pose_endpoint,[this,id,pose_endpoint](const Pose &msg) {
+            const auto p=pose_input(msg,world_,pose_endpoint); const auto &r=p.linear();
             if(std::abs(p.translation().z())>1e-9 || std::abs(r(2,0))>1e-9 ||
                std::abs(r(2,1))>1e-9 || std::abs(r(0,2))>1e-9 ||
                std::abs(r(1,2))>1e-9 || std::abs(r(2,2)-1)>1e-9)
@@ -187,7 +188,7 @@ public:
       routes.append(kstone_ros::Node::map({{"module",m->id()},{"port","target"},{"joint_names",names}}));
     }
     subscribe<Joints>(topic("control/joint"),[this](const Joints &m) {
-      joint_target_header(m.header);
+      joint_target_header(topic("control/joint"), m.header);
       std::vector<std::string> ignored;
       core_->joint_targets(m.name,m.position,&ignored);
       if(!ignored.empty()) {
@@ -386,9 +387,37 @@ private:
              header.stamp.nanosec)) *
            1e-9;
   }
-  void joint_target_header(const std_msgs::msg::Header &header) {
-    const double a=age(header);
-    if(a<0 || a>command_timeout_) throw std::invalid_argument("stale/future stamped joint target");
+  // Command stamps are checked for continuity, not against the node clock, so recorded bags and
+  // publishers on another clock work. Each topic keeps a reference (stamp, receipt): a message whose
+  // stamp advanced by more or less than command_timeout_s beyond the time since the reference
+  // (delayed in transit, a backlog, a clock jump) or went backwards is rejected and the reference is
+  // dropped; so it is after command_timeout_s of silence. The next message starts a new reference.
+  // Arriving sooner than the reference predicts means the reference itself was late: it is rebased.
+  // A zero stamp uses the reception time and does not touch the reference.
+  struct StampReference { std::int64_t stamp{}, receipt{}, last_stamp{}, last_receipt{}; bool valid{false}; };
+  void command_stamp(const std::string &stream, const std_msgs::msg::Header &header) {
+    if (header.stamp.sec == 0 && header.stamp.nanosec == 0) return;
+    const std::int64_t stamp = std::int64_t(header.stamp.sec) * 1000000000 + header.stamp.nanosec;
+    const std::int64_t now = get_clock()->now().nanoseconds();
+    const auto timeout = std::int64_t(command_timeout_ * 1e9);
+    auto &r = stamp_references_[stream];
+    if (r.valid && now - r.last_receipt > timeout) r.valid = false;
+    if (!r.valid) { r = {stamp, now, stamp, now, true}; return; }
+    if (stamp < r.last_stamp) {
+      r.valid = false;
+      throw std::invalid_argument("command timestamp went backwards; waiting for a new reference");
+    }
+    const std::int64_t late = (now - r.receipt) - (stamp - r.stamp);
+    if (late > timeout || late < -timeout) {
+      r.valid = false;
+      throw std::invalid_argument(std::string("command timestamp ") + (late > 0 ? "fell behind" : "ran ahead of") +
+                                  " its arrival by more than command_timeout_s; waiting for a new reference");
+    }
+    if (late < 0) { r.stamp = stamp; r.receipt = now; }
+    r.last_stamp = stamp; r.last_receipt = now;
+  }
+  void joint_target_header(const std::string &stream, const std_msgs::msg::Header &header) {
+    command_stamp(stream, header);
     if(!header.frame_id.empty())
       throw std::invalid_argument("joint target frame_id must be empty; named joint coordinates need no TF conversion");
   }
@@ -399,14 +428,10 @@ private:
           "feedback timestamp is stale or in the future");
     return a;
   }
+  // `command_stream` names the command topic whose stamp continuity is checked; feedback passes none.
   Eigen::Isometry3d pose_input(const Pose &msg, const std::string &frame,
-                               bool validate_stamp = true) {
-    if (validate_stamp) {
-      const double a = age(msg.header);
-      if (a < 0 || a > command_timeout_)
-        throw std::invalid_argument(
-            "message timestamp is stale or in the future");
-    }
+                               const std::string &command_stream = {}) {
+    if (!command_stream.empty()) command_stamp(command_stream, msg.header);
     if (!msg.header.frame_id.empty() && msg.header.frame_id != frame)
       throw std::invalid_argument("expected frame " + frame +
                                   "; no implicit TF conversion");
@@ -568,6 +593,7 @@ private:
   std::unique_ptr<Controller> core_;
   std::string prefix_, frame_prefix_, world_, base_, center_;
   double command_timeout_{0.5}, feedback_timeout_{0.25}, state_rate_{30}, timer_dt_{0};
+  std::map<std::string, StampReference> stamp_references_;  // per command topic
   std::optional<double> next_state_, base_zero_until_;
   double base_hold_{0.5};
   bool driver_io_{true};
