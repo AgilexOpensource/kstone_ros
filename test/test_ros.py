@@ -519,12 +519,13 @@ def test_canonical_odometry_and_joint_feedback_route_to_integrated_chassis(start
     message.child_frame_id = "base_link"
     message.pose.pose.position.x = 1.0
     message.pose.pose.orientation.w = 1.0
-    for _ in range(5):
+    # Attaching needs feedback_timeout_s of continuously fresh feedback, so keep publishing.
+    def attached():
         joints.publish(JointState(name=JOINT_NAMES, position=INITIAL_POSITIONS))
         odom.publish(message)
-        probe.spin_for(bridge, 0.03)
-    probe.wait(bridge, lambda: states[-1]["joints_attached"] and states[-1]["base_attached"]
-               and bases[-1].pose.position.x == pytest.approx(1.0))
+        return (states[-1]["joints_attached"] and states[-1]["base_attached"]
+                and bases and bases[-1].pose.position.x == pytest.approx(1.0))
+    probe.wait(bridge, attached)
     probe.wait(bridge, lambda: not states[-1]["joints_attached"] and not states[-1]["base_attached"])
     assert not states[-1]["fault"]
 
