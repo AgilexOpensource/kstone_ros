@@ -148,12 +148,13 @@ private:
     double receipt{};
     kstone::PortValue value;
   };
+  // Per input and port label: the newest position not yet known to be consumed, the request that set it
+  // (0 = none) and that request's receipt. Unconsumed requests merge, so coalescing drops no joint.
   struct JointBatch {
     std::uint64_t sequence{}, generation{};
-    double receipt{};
-    std::vector<kstone::PortValue> values;  // Per input: positions of `names`, a subset of the port labels.
-    std::vector<std::vector<std::string>> names;
-    std::vector<unsigned char> touched;
+    std::vector<Eigen::VectorXd> values;
+    std::vector<std::vector<std::uint64_t>> sequences;
+    std::vector<std::vector<double>> receipts;
   };
   struct Feedback {
     std::uint64_t sequence{}, generation{};
@@ -184,6 +185,12 @@ private:
   std::vector<std::pair<std::size_t, std::size_t>> addresses_;
   // One coalesced aggregate request, bounded by immutable configured ports.
   Latest<JointBatch> joint_targets_;
+  JointBatch joint_pending_;  // Producer-side merge of every request not yet consumed.
+  std::atomic<std::uint64_t> joint_consumed_{0};  // Newest batch sequence the owner has processed.
+  std::uint64_t processed_joints_{0};  // Owner copy of joint_consumed_.
+  std::vector<std::uint64_t> joint_requests_;  // Owner scratch: pending request sequences.
+  std::vector<Eigen::Index> joint_elements_;  // Owner scratch: elements written by one request.
+  Eigen::VectorXd joint_values_;  // Owner scratch: values for joint_elements_.
   std::map<std::string, std::pair<std::size_t, std::size_t>> joint_routes_;
   std::set<std::string> ambiguous_joints_;
   std::vector<std::uint64_t> accepted_sequences_;
@@ -235,6 +242,7 @@ private:
   bool base_synced() const;
   void write_port(std::size_t, std::size_t, const kstone::PortValue &, double, double application_time = -1);
   void apply_joint_targets(const JointBatch &);
+  void apply_joint_request(const JointBatch &, std::uint64_t sequence);
   void start_home(std::size_t, double);
   Eigen::Isometry3d port_pose(std::size_t, std::size_t);
 };

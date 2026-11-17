@@ -410,6 +410,34 @@ int main() {
       f.advance();cycle(c);
       check(c.read("hand","target").vector.isApprox(vector({0.015,0.05}).vector),"consumed aggregate replayed");
     });
+    test("aggregate requests in one owner cycle merge without dropping joints", [] {
+      Fixture f;Controller c(f.joint_config(),f.options());
+      auto hand=c.joint_targets({"finger_joint","slide_x"},{0.02,0.12});
+      auto axes=c.joint_targets({"slide_y"},{0.08});
+      auto z=c.joint_targets({"slide_z"},{0.1});
+      auto finger=c.joint_targets({"finger_joint"},{0.03});
+      cycle(c);
+      check(c.read("hand","target").vector.isApprox(vector({0.03,0.12}).vector),"earlier hand request dropped");
+      check(c.read("axes","target").vector.isApprox(vector({0.08,0.1}).vector),"earlier axes request dropped");
+      int applied=0;for(const auto &o:c.snapshot().outcomes)
+        applied+=o.applied&&(o.sequence==hand||o.sequence==axes||o.sequence==z||o.sequence==finger);
+      check(applied==4,"each merged request needs its own outcome");
+      // A consumed request is never merged again into a later one.
+      c.write("hand","target",vector({0.015,0.05}));f.advance();cycle(c);
+      c.joint_targets({"slide_y"},{0.06});f.advance();cycle(c);
+      check(c.read("hand","target").vector.isApprox(vector({0.015,0.05}).vector),"consumed request replayed");
+      check(c.read("axes","target").vector.isApprox(vector({0.06,0.1}).vector),"later subset failed");
+      // A rejected request does not take a valid one queued in the same cycle with it.
+      c.enable("axes",false);f.advance();cycle(c);
+      auto bad=c.joint_targets({"slide_y"},{0.07});
+      auto good=c.joint_targets({"finger_joint"},{0.025});
+      f.advance();cycle(c);
+      bool rejected=false,accepted=false;for(const auto &o:c.snapshot().outcomes) {
+        rejected|=o.sequence==bad&&!o.applied; accepted|=o.sequence==good&&o.applied;
+      }
+      check(rejected&&accepted,"merged requests must be judged independently");
+      check(c.read("hand","target").vector[0]==0.025,"valid merged request not applied");
+    });
     test("aggregate ambiguous ownership only rejects aggregate routing", [] {
       Fixture f;Controller c(f.joint_config(true),f.options());
       rejects([&]{c.joint_targets({"finger_joint","slide_x","slide_y"},{0.02,0.1,0.05});});

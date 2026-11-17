@@ -39,6 +39,7 @@ Driver outputs depend on real feedback, not a stale model initialization. Out-of
 
 - Use `name` and `position` in any order. `header.frame_id` must be empty; velocity and effort are ignored.
 - Any subset of joints is accepted; omitted joints keep their module's current target.
+- Messages that arrive within one control cycle are all applied, in order; a later message only overrides the joints it names. Each message is accepted or rejected as a whole.
 - Names outside every `joint_target` module are ignored with a throttled warning. Values are clamped to the module limits.
 - Duplicate names, a name/position count mismatch, non-finite values or ambiguous ownership reject the whole message.
 

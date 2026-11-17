@@ -280,8 +280,19 @@ Controller::Controller(const std::string &file, Options options)
     for(std::size_t j=0;j<labels.size();++j)
       if(!joint_routes_.emplace(labels[j],std::make_pair(i,j)).second) ambiguous_joints_.insert(labels[j]);
   }
-  for(auto &slot:joint_targets_.slots) {
-    slot.values=accepted_values_; slot.names.resize(inputs_.size()); slot.touched.assign(inputs_.size(),0);
+  {
+    auto &p=joint_pending_; std::size_t widest=0,total=0;
+    p.values.resize(inputs_.size()); p.sequences.resize(inputs_.size()); p.receipts.resize(inputs_.size());
+    for(const auto &entry:joint_routes_) {
+      const auto input=entry.second.first;
+      const auto n=metadata_[addresses_[input].first]->inputs[addresses_[input].second].labels.size();
+      if(p.sequences[input].size()==n) continue;
+      p.values[input]=Eigen::VectorXd::Zero(Eigen::Index(n));
+      p.sequences[input].assign(n,0); p.receipts[input].assign(n,0);
+      widest=std::max(widest,n); total+=n;
+    }
+    for(auto &slot:joint_targets_.slots) slot=p;
+    joint_requests_.reserve(total); joint_elements_.reserve(widest); joint_values_.resize(Eigen::Index(widest));
   }
   expired_.assign(metadata_.size(), 0); needs_command_.assign(metadata_.size(),0);
   stamps_.assign(joints_.size()+1, -1);
@@ -414,39 +425,63 @@ void Controller::write_port(std::size_t mi,std::size_t pi,const kstone::PortValu
   if (expired_[mi]) { m.set_enabled(true); expired_[mi]=0; }
 }
 void Controller::apply_joint_targets(const JointBatch &batch) {
+  // Each request still pending in the merged batch, oldest first, as if received in separate cycles.
+  joint_requests_.clear();
+  for(std::size_t i=0;i<batch.sequences.size();++i)
+    for(const auto s:batch.sequences[i])
+      if(s>processed_joints_ && s>accepted_sequences_[i] &&
+         std::find(joint_requests_.begin(),joint_requests_.end(),s)==joint_requests_.end())
+        joint_requests_.push_back(s);
+  std::sort(joint_requests_.begin(),joint_requests_.end());
+  if(joint_requests_.empty() && batch.sequence>processed_joints_) outcome(batch.sequence,false,"superseded aggregate");
+  for(const auto s:joint_requests_) apply_joint_request(batch,s);
+  processed_joints_=std::max(processed_joints_,batch.sequence);
+  joint_consumed_.store(processed_joints_,std::memory_order_release);
+}
+void Controller::apply_joint_request(const JointBatch &batch,std::uint64_t sequence) {
+  const auto pending=[&](std::size_t i) {
+    if(sequence<=accepted_sequences_[i]) return false;
+    const auto &s=batch.sequences[i]; return std::find(s.begin(),s.end(),sequence)!=s.end();
+  };
   try {
     if(latched_ || batch.generation!=owner_generation_)
       throw std::runtime_error("discarded across fault/recovery");
-    const double t=now(); bool pending=false;
+    const double t=now();
     // Check every non-superseded module before writing anything or renewing leases.
     // joint_target set_target gates are immutable validation, lock and home.
-    for(std::size_t i=0;i<batch.touched.size();++i) {
-      if(!batch.touched[i] || batch.sequence<=accepted_sequences_[i]) continue;
-      pending=true; const auto [mi,pi]=addresses_[i];
+    for(std::size_t i=0;i<batch.sequences.size();++i) {
+      if(!pending(i)) continue;
+      const auto [mi,pi]=addresses_[i];
       const auto &m=*engine_->modules().modules()[mi];
       const auto &port=metadata_[mi]->inputs[pi];
       const double limit=port.timeout>0?std::min(port.timeout,options_.command_timeout_s):options_.command_timeout_s;
-      if(t-batch.receipt>limit) throw std::runtime_error("aggregate expired before application");
+      const auto &s=batch.sequences[i];
+      const double receipt=batch.receipts[i][std::size_t(std::find(s.begin(),s.end(),sequence)-s.begin())];
+      if(t-receipt>limit) throw std::runtime_error("aggregate expired before application");
       if(!m.enabled() && !expired_[mi]) throw std::runtime_error("aggregate module manually disabled");
       const std::string_view home=m.home_state()?m.home_state():"";
       if(m.locked_by() || home=="waiting" || home=="executing")
         throw std::runtime_error("aggregate module locked or homing");
     }
-    if(!pending) throw std::runtime_error("superseded aggregate");
     // Owner state cannot change between preflight and these built-in writes.
     // Use one application time; no mid-batch expiry and no ROS synchronization.
-    for(std::size_t i=0;i<batch.touched.size();++i) {
-      if(!batch.touched[i] || batch.sequence<=accepted_sequences_[i]) continue;
+    for(std::size_t i=0;i<batch.sequences.size();++i) {
+      if(!pending(i)) continue;
       const auto [mi,pi]=addresses_[i]; auto &m=*engine_->modules().modules()[mi];
-      require(m.write_port(pi,batch.names[i],batch.values[i].vector));
+      joint_elements_.clear();
+      for(std::size_t j=0;j<batch.sequences[i].size();++j) if(batch.sequences[i][j]==sequence) {
+        joint_values_[Eigen::Index(joint_elements_.size())]=batch.values[i][Eigen::Index(j)];
+        joint_elements_.push_back(Eigen::Index(j));
+      }
+      require(m.write_port(pi,joint_elements_,joint_values_.head(Eigen::Index(joint_elements_.size()))));
       require(m.read_port(pi,accepted_values_[i]));
       refresh_[i]=!m.enabled() || !m.running();
       needs_command_[mi]=0;
       if (expired_[mi]) { m.set_enabled(true); expired_[mi]=0; }
-      accepted_sequences_[i]=batch.sequence;
+      accepted_sequences_[i]=sequence;
     }
-    outcome(batch.sequence,true);
-  } catch(const std::exception &err) { outcome(batch.sequence,false,err.what()); }
+    outcome(sequence,true);
+  } catch(const std::exception &err) { outcome(sequence,false,err.what()); }
 }
 void Controller::start_home(std::size_t mi,double) {
   auto &m=*engine_->modules().modules()[mi]; require(m.request_home());
@@ -683,23 +718,26 @@ bool Controller::poll() {
 std::uint64_t Controller::joint_targets(const std::vector<std::string> &names,const std::vector<double> &positions,std::vector<std::string> *ignored) {
   const double receipt=now(); const auto generation=generation_.load();
   check_joint_input(names,positions);
-  std::map<std::size_t,std::pair<std::vector<std::string>,std::vector<double>>> groups;
+  std::vector<std::pair<std::pair<std::size_t,std::size_t>,double>> routed;
   for(std::size_t j=0;j<names.size();++j) {
     const auto route=joint_routes_.find(names[j]);
     if(route==joint_routes_.end()) { if(ignored) ignored->push_back(names[j]); continue; }
     if(ambiguous_joints_.count(names[j])) throw std::invalid_argument("ambiguous aggregate joint ownership");
-    auto &group=groups[route->second.first]; group.first.push_back(names[j]); group.second.push_back(positions[j]);
+    routed.push_back({route->second,positions[j]});
   }
   if(lifecycle_!=1 && lifecycle_!=0) { ++rejected_; throw std::runtime_error("owner not running"); }
-  if(groups.empty()) return next_sequence_;
-  auto &slot=joint_targets_.write(); std::fill(slot.touched.begin(),slot.touched.end(),0);
-  for(const auto &[i,group]:groups) {
-    slot.names[i]=group.first;
-    slot.values[i].vector=Eigen::Map<const Eigen::VectorXd>(group.second.data(),Eigen::Index(group.second.size()));
-    slot.touched[i]=1;
+  if(routed.empty()) return next_sequence_;
+  // Merge into every request the owner has not consumed yet; a stale merge is filtered by the owner.
+  auto &p=joint_pending_; const auto consumed=joint_consumed_.load(std::memory_order_acquire);
+  const bool reset=p.generation!=generation;
+  for(auto &sequences:p.sequences) for(auto &s:sequences) if(reset || s<=consumed) s=0;
+  const auto sequence=++next_sequence_;
+  for(const auto &[route,position]:routed) {
+    const auto [i,j]=route;
+    p.values[i][Eigen::Index(j)]=position; p.sequences[i][j]=sequence; p.receipts[i][j]=receipt;
   }
-  slot.sequence=++next_sequence_; slot.generation=generation; slot.receipt=receipt;
-  joint_targets_.publish(); ++coalesced_; return next_sequence_;
+  p.sequence=sequence; p.generation=generation;
+  joint_targets_.write()=p; joint_targets_.publish(); ++coalesced_; return sequence;
 }
 std::uint64_t Controller::feedback_joints(const std::vector<std::string> &names,const std::vector<double> &positions,double age) {
   if(!feedback_) throw std::invalid_argument("joint feedback is unavailable with an injected robot");
