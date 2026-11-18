@@ -203,6 +203,9 @@ public:
     service<Trigger>(topic("home"), [this](auto, auto response) {
       accepted(response, [&] { return core_->reset_home(); });
     });
+    service<Trigger>(topic("home_cancel"), [this](auto, auto response) {
+      accepted(response, [&] { return core_->cancel_home(); });
+    });
     service<SetBool>(topic("driver_io"), [this](auto request, auto response) {
       response->success = set_driver_io(request->data, response->message);
     });
@@ -239,7 +242,7 @@ public:
     const std::vector<std::string> module_names={"state","feedback/pose","control/pose","control/cmd_vel","enable","home"};
     for(const auto &m:core_->modules()) for(std::size_t i=0;i<module_names.size();++i)
       display_rank(topic(m->id()+"/"+module_names[i]),i<4?11+int(i):13+int(i));
-    display_rank(topic("home"),16); display_rank(topic("driver_io"),17);
+    display_rank(topic("home"),16); display_rank(topic("home_cancel"),16); display_rank(topic("driver_io"),17);
     auto ordered_interfaces=[&](const kstone_ros::Node &records) {
       auto rows=records.items();
       auto rank=[&](const kstone_ros::Node &record) {

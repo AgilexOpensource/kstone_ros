@@ -394,6 +394,7 @@ std::uint64_t Controller::reset_target(const std::string &id) {
   input_index(id,"target"); return enqueue(Operation::reset_target,module_index(id));
 }
 std::uint64_t Controller::reset_home() { return enqueue(Operation::reset_home); }
+std::uint64_t Controller::cancel_home() { return enqueue(Operation::cancel_home); }
 std::uint64_t Controller::recover() { return enqueue(Operation::recover); }
 void Controller::outcome(std::uint64_t id,bool applied,std::string_view error) {
   auto &o=outcomes_[outcome_count_++ % outcomes_.size()]; o.sequence=id; o.applied=applied; o.error.set(error);
@@ -507,6 +508,9 @@ void Controller::apply(const Command &c) {
         break;
       }
       case Operation::home: start_home(c.module,c.receipt); break;
+      case Operation::cancel_home:
+        for (const auto &m:engine_->modules().modules()) if (m->homeable()) require(m->cancel_home());
+        break;
       case Operation::reset_target: {
         auto &m=*engine_->modules().modules()[c.module];
         auto pi=m.port_index("target"); kstone::PortValue v; v.pose=port_pose(c.module,pi);

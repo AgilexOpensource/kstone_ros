@@ -944,6 +944,7 @@ def test_discovery_presentation_driver_engine_module_topics_then_services(start_
         for i, name in enumerate(module_names):
             ranks[bridge.topic(module["id"] + "/" + name)] = 11 + i if i < 4 else 13 + i
     ranks[bridge.topic("home")] = 16
+    ranks[bridge.topic("home_cancel")] = 16
     ranks[bridge.topic("driver_io")] = 17
     def check_order(records):
         values = [ranks[r.get("topic", r.get("service"))] for r in records]

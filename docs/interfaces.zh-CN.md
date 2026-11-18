@@ -63,6 +63,7 @@
 | 服务 | 类型 | 说明 |
 |---|---|---|
 | `~/home` | `std_srvs/Trigger` | 执行 kstone `home_all`，并将底盘速度置零 |
+| `~/home_cancel` | `std_srvs/Trigger` | 在同一周期取消所有正在进行的回零，各模块在当前位置平滑停下，保持使能并停在原地；未在回零的模块不受影响 |
 | `~/M/home` | `std_srvs/Trigger` | 让一个可回零模块回零 |
 | `~/M/enable` | `std_srvs/SetBool` | 启用或禁用一个模块 |
 | `~/driver_io` | `std_srvs/SetBool` | 暂停或恢复 ROS 层与驱动的数据收发；引擎继续运行 |
@@ -107,7 +108,7 @@ ros2 service call /kstone/tool_pose/enable std_srvs/srv/SetBool "{data: false}"
 
 在 `modules.M` 中，`running` 表示模块参与了本周期求解，`held_by` 是抢占它的模块 ID 或 `null`，不可回零的模块 `home_state` 为 `null`。
 
-`home_state` 取值为 `idle`、`waiting`（已排队）、`executing`、`succeeded`、`timed_out`（`timeout_s` 内无进展）和 `aborted`（被禁用、跳过周期或重新同步）。终止状态保持到下一次回零请求。
+`home_state` 取值为 `idle`、`waiting`（已排队）、`executing`、`succeeded`、`timed_out`（`timeout_s` 内无进展）、`aborted`（被禁用、跳过周期或重新同步）和 `cancelled`（`~/home_cancel`）。终止状态保持到下一次回零请求。
 
 确认回零完成：
 

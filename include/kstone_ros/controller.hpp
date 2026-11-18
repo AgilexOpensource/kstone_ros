@@ -138,6 +138,9 @@ public:
   std::uint64_t reset_target(const std::string &);
   /// Home every enabled homeable module (including ones stopped by a fault) and zero the chassis velocity.
   std::uint64_t reset_home();
+  /// Stop every running homing in the same cycle where its ramp is; the modules keep their joints. Modules
+  /// that are not homing are left alone.
+  std::uint64_t cancel_home();
   /// Clear a latched fault. Motion modules are stopped and requests submitted before it are discarded; a module
   /// stopped this way resumes on its next accepted target.
   std::uint64_t recover();
@@ -200,7 +203,7 @@ public:
   /// Set by poll(): latched fault reason (empty when healthy) and solve quality.
   std::string fault, quality{"uninitialized"};
 private:
-  enum class Operation { enable, home, reset_target, reset_home, recover };
+  enum class Operation { enable, home, cancel_home, reset_target, reset_home, recover };
   struct Command {
     Operation op{};
     std::size_t module{};

@@ -554,6 +554,29 @@ int main() {
       c.home("axes");f.advance();cycle(c);
       check(home("axes")!="idle" && !home("axes").empty(),"single home blocked by gaze");
     });
+    test("home cancel stops every running home and keeps the modules enabled", [] {
+      Fixture f;
+      auto file=f.config(false,false,[](Node &n) {
+        auto modules=*n.find("modules");auto tool=*modules.find("tool_pose");
+        tool.set("home",Node::map({{"position",Node::list({0.2,0.0,0.35})}}));
+        modules.set("tool_pose",tool);n.set("modules",modules);
+      });
+      Controller c(file,f.options());cycle(c);
+      auto home=[&](const std::string &id) {
+        for(std::size_t i=0;i<c.modules().size();++i) if(c.modules()[i]->id()==id) return std::string(c.snapshot().home_states[i].c_str());
+        throw std::runtime_error("unknown module");
+      };
+      c.cancel_home();f.advance();cycle(c);  // nothing homing: no-op
+      check(home("tool_pose")=="idle","cancel without home changed state");
+      c.home("tool_pose");c.home("gripper_joint");f.advance();cycle(c);f.advance();cycle(c);
+      const bool running=home("tool_pose")=="executing" || home("tool_pose")=="waiting";
+      check(running,"home did not start: "+home("tool_pose"));
+      c.cancel_home();f.advance();cycle(c);f.advance();cycle(c);
+      check(home("tool_pose")=="cancelled","tool_pose not cancelled: "+home("tool_pose"));
+      const auto g=home("gripper_joint");
+      check(g=="cancelled" || g=="succeeded","gripper_joint not cancelled: "+g);
+      check(enabled(c,"tool_pose") && enabled(c,"gripper_joint"),"cancel disabled a module");
+    });
     test("home and snapshot outputs", [] {
       Fixture f;
       Controller c(KSTONE_TEST_CONFIG, f.options());

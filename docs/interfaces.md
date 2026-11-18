@@ -63,6 +63,7 @@ Driver outputs depend on real feedback, not a stale model initialization. Out-of
 | Service | Type | Description |
 |---|---|---|
 | `~/home` | `std_srvs/Trigger` | Run kstone `home_all` and zero the chassis velocity |
+| `~/home_cancel` | `std_srvs/Trigger` | Stop every running Home in the same cycle, smoothly where each module is; the modules stay enabled and hold there. Modules not homing are left alone |
 | `~/M/home` | `std_srvs/Trigger` | Home one homeable module |
 | `~/M/enable` | `std_srvs/SetBool` | Enable or disable one module |
 | `~/driver_io` | `std_srvs/SetBool` | Pause or resume ROS-layer driver data exchange; the engine keeps running |
@@ -107,7 +108,7 @@ ros2 service call /kstone/tool_pose/enable std_srvs/srv/SetBool "{data: false}"
 
 In `modules.M`, `running` means the module was in this cycle's solve, `held_by` is the preempting module ID or `null`, and `home_state` is `null` for modules that cannot home.
 
-`home_state` values are `idle`, `waiting` (queued), `executing`, `succeeded`, `timed_out` (no progress within `timeout_s`) and `aborted` (disabled, skipped cycle or resync). A final state persists until the next home request.
+`home_state` values are `idle`, `waiting` (queued), `executing`, `succeeded`, `timed_out` (no progress within `timeout_s`), `aborted` (disabled, skipped cycle or resync) and `cancelled` (`~/home_cancel`). A final state persists until the next home request.
 
 To check that homing finished:
 
