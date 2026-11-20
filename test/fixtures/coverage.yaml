@@ -52,8 +52,6 @@ modules:
       max_lateral_deceleration: 0.8
       max_angular_acceleration: 2.0
       max_angular_deceleration: 2.0
-      target_position_deadband: 0.02
-      target_orientation_deadband: 0.03
   # frame_target: full position/orientation profile, partial axis weights, world axes
   torso_pose:
     type: frame_target

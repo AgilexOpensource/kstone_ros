@@ -731,7 +731,7 @@ def test_typed_current_fk_and_named_joint_input_without_joint_telemetry(start_no
 
 
 @pytest.mark.parametrize("kinematics", ["omni", "differential"])
-def test_typed_chassis_planar_pose_validation_and_differential_twist_only(start_node, probe, tmp_path, kinematics):
+def test_typed_chassis_planar_pose_validation(start_node, probe, tmp_path, kinematics):
     path = config_variant(tmp_path)
     config = yaml.safe_load(path.read_text())
     base = config["modules"].pop("chassis")
@@ -766,52 +766,44 @@ def test_typed_chassis_planar_pose_validation_and_differential_twist_only(start_
     graph = {name for name, _ in probe.node.get_topic_names_and_types()}
     assert not any(name.startswith(bridge.prefix + "/") and
                    ("/ports/" in name or "/tasks/" in name) for name in graph)
-    assert (pose_topic in graph) == (kinematics == "omni")
-    assert (pose_topic in endpoints) == (kinematics == "omni")
-    assert pose_info["ros_exposed"] == (kinematics == "omni")
+    assert pose_topic in graph
+    assert pose_topic in endpoints
+    assert pose_info["ros_exposed"]
     target = probe.node.create_publisher(PoseStamped, pose_topic, 10)
     before = states[-1]["modules"]["rolling_base"]["ports"]["pose_target"]
-    if kinematics == "omni":
-        probe.wait(bridge, lambda: target.get_subscription_count())
-        for invalid in ["z", "tilt", "frame", "nan", "zero_quaternion", "nan_quaternion"]:
-            message = PoseStamped()
-            message.header.frame_id = "world"
-            message.pose.position.x = 0.08
-            message.pose.orientation.w = 1.0
-            if invalid == "z":
-                message.pose.position.z = 0.01
-            elif invalid == "tilt":
-                message.pose.orientation.x = 0.1
-            elif invalid == "frame":
-                message.header.frame_id = "body_center"
-            elif invalid == "nan":
-                message.pose.position.x = float("nan")
-            elif invalid == "zero_quaternion":
-                message.pose.orientation.w = 0.0
-            else:
-                message.pose.orientation.w = float("nan")
-            target.publish(message)
-            probe.spin_for(bridge, 0.05)
-        probe.spin_for(bridge, 0.15)
-        assert states[-1]["modules"]["rolling_base"]["ports"]["pose_target"] == before
-        assert "rolling_base" not in states[-1]["expired_modules"]
-        import math
+    probe.wait(bridge, lambda: target.get_subscription_count())
+    for invalid in ["z", "tilt", "frame", "nan", "zero_quaternion", "nan_quaternion"]:
         message = PoseStamped()
         message.header.frame_id = "world"
-        message.pose.position.x, message.pose.position.y = 0.08, -0.02
-        # Non-unit yaw quaternion is normalized before projecting x/y/yaw.
-        message.pose.orientation.w = 2 * math.cos(0.1)
-        message.pose.orientation.z = 2 * math.sin(0.1)
+        message.pose.position.x = 0.08
+        message.pose.orientation.w = 1.0
+        if invalid == "z":
+            message.pose.position.z = 0.01
+        elif invalid == "tilt":
+            message.pose.orientation.x = 0.1
+        elif invalid == "frame":
+            message.header.frame_id = "body_center"
+        elif invalid == "nan":
+            message.pose.position.x = float("nan")
+        elif invalid == "zero_quaternion":
+            message.pose.orientation.w = 0.0
+        else:
+            message.pose.orientation.w = float("nan")
         target.publish(message)
-        probe.wait(bridge, lambda: states[-1]["modules"]["rolling_base"]["ports"]["pose_target"] ==
-                   pytest.approx([0.08, -0.02, 0.2]))
-    else:
-        assert "control_topic" not in pose_info
-        probe.spin_for(bridge, 0.15)
-        assert target.get_subscription_count() == 0
-        target.publish(target_message())
-        probe.spin_for(bridge, 0.15)
-        assert states[-1]["modules"]["rolling_base"]["ports"]["pose_target"] == before
+        probe.spin_for(bridge, 0.05)
+    probe.spin_for(bridge, 0.15)
+    assert states[-1]["modules"]["rolling_base"]["ports"]["pose_target"] == before
+    assert "rolling_base" not in states[-1]["expired_modules"]
+    import math
+    message = PoseStamped()
+    message.header.frame_id = "world"
+    message.pose.position.x, message.pose.position.y = 0.08, -0.02
+    # Non-unit yaw quaternion is normalized before projecting x/y/yaw.
+    message.pose.orientation.w = 2 * math.cos(0.1)
+    message.pose.orientation.z = 2 * math.sin(0.1)
+    target.publish(message)
+    probe.wait(bridge, lambda: states[-1]["modules"]["rolling_base"]["ports"]["pose_target"] ==
+               pytest.approx([0.08, -0.02, 0.2]))
     old = probe.node.create_publisher(Float64MultiArray,
                                      bridge.topic("modules/rolling_base/ports/pose_target/command"), 10)
     probe.spin_for(bridge, 0.1)

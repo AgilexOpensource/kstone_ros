@@ -82,10 +82,11 @@ Names are private to the node: with the default node name `kstone`, `~/state` is
 | `~/state` | Pub `std_msgs/String` | JSON engine state, latched |
 | `~/discover` | Pub `std_msgs/String` | JSON list of modules and interfaces, latched |
 | `~/control/joint` | Sub `sensor_msgs/JointState` | Targets for all `joint_target` modules |
-| `~/M/control/pose` | Sub `geometry_msgs/PoseStamped` | Frame target, or omni chassis pose target |
+| `~/M/control/pose` | Sub `geometry_msgs/PoseStamped` | Frame target, or chassis pose target |
 | `~/M/control/cmd_vel` | Sub `geometry_msgs/Twist` | Chassis body-frame velocity |
 | `~/M/feedback/pose` | Pub `geometry_msgs/PoseStamped` | Current pose of the frame or chassis |
 | `~/home`, `~/M/home` | Srv `std_srvs/Trigger` | Home all controlled modules, or one module |
+| `~/home_cancel` | Srv `std_srvs/Trigger` | Stop every running Home where each module is |
 | `~/M/enable` | Srv `std_srvs/SetBool` | Enable or disable one module |
 | `~/driver_io` | Srv `std_srvs/SetBool` | Pause or resume driver feedback and command exchange |
 

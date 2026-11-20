@@ -82,10 +82,11 @@ ros2 topic pub -r 10 /kstone/chassis/control/cmd_vel geometry_msgs/msg/Twist \
 | `~/state` | 发布 `std_msgs/String` | JSON 引擎状态，锁存 |
 | `~/discover` | 发布 `std_msgs/String` | JSON 模块与接口列表，锁存 |
 | `~/control/joint` | 订阅 `sensor_msgs/JointState` | 所有 `joint_target` 模块的目标 |
-| `~/M/control/pose` | 订阅 `geometry_msgs/PoseStamped` | frame 目标，或全向底盘位姿目标 |
+| `~/M/control/pose` | 订阅 `geometry_msgs/PoseStamped` | frame 目标，或底盘位姿目标 |
 | `~/M/control/cmd_vel` | 订阅 `geometry_msgs/Twist` | 底盘机体坐标系速度 |
 | `~/M/feedback/pose` | 发布 `geometry_msgs/PoseStamped` | frame 或底盘的当前位姿 |
 | `~/home`、`~/M/home` | 服务 `std_srvs/Trigger` | 让所有受控模块或单个模块回零 |
+| `~/home_cancel` | 服务 `std_srvs/Trigger` | 让所有正在回零的模块就地停下 |
 | `~/M/enable` | 服务 `std_srvs/SetBool` | 启用或禁用一个模块 |
 | `~/driver_io` | 服务 `std_srvs/SetBool` | 暂停或恢复与驱动的反馈和命令收发 |
 

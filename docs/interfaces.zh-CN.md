@@ -47,7 +47,7 @@
 
 | 话题 | 类型 | 说明 |
 |---|---|---|
-| `~/M/control/pose` | 订阅 `geometry_msgs/PoseStamped` | `frame_target` 目标，或全向底盘平面位姿目标 |
+| `~/M/control/pose` | 订阅 `geometry_msgs/PoseStamped` | `frame_target` 目标，或底盘平面位姿目标（差速底盘不横移） |
 | `~/M/control/cmd_vel` | 订阅 `geometry_msgs/Twist` | 底盘机体坐标系速度（全向或差速） |
 | `~/M/feedback/pose` | 发布 `geometry_msgs/PoseStamped` | 当前 frame 位姿或底盘控制中心估计，不是目标 |
 

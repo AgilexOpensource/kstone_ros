@@ -47,7 +47,7 @@ Driver outputs depend on real feedback, not a stale model initialization. Out-of
 
 | Topic | Type | Description |
 |---|---|---|
-| `~/M/control/pose` | Sub `geometry_msgs/PoseStamped` | `frame_target` target, or omni chassis planar pose target |
+| `~/M/control/pose` | Sub `geometry_msgs/PoseStamped` | `frame_target` target, or chassis planar pose target (a differential base never moves sideways) |
 | `~/M/control/cmd_vel` | Sub `geometry_msgs/Twist` | Chassis body-frame velocity (omni or differential) |
 | `~/M/feedback/pose` | Pub `geometry_msgs/PoseStamped` | Current frame pose or chassis control-center estimate, not the target |
 

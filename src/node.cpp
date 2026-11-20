@@ -161,20 +161,18 @@ public:
         subscribe<Twist>(endpoint,[this,id](const Twist &msg) { twist_input(id,msg); }, rclcpp::QoS(10),
                          kstone_ros::Node::map({{"frame",frame_prefix_+m->chassis_frame}}));
         module_interface(id,endpoint,"subscribe","command","velocity",frame_prefix_+m->chassis_frame);
-        if(m->chassis_omni) {
-          const auto pose_endpoint=topic(id+"/control/pose");
-          subscribe<Pose>(pose_endpoint,[this,id,pose_endpoint](const Pose &msg) {
-            const auto p=pose_input(msg,world_,pose_endpoint); const auto &r=p.linear();
-            if(std::abs(p.translation().z())>1e-9 || std::abs(r(2,0))>1e-9 ||
-               std::abs(r(2,1))>1e-9 || std::abs(r(0,2))>1e-9 ||
-               std::abs(r(1,2))>1e-9 || std::abs(r(2,2)-1)>1e-9)
-              throw std::invalid_argument("chassis pose must have zero z and yaw-only rotation");
-            kstone::PortValue value;
-            value.vector=Eigen::Vector3d(p.translation().x(),p.translation().y(),std::atan2(r(1,0),r(0,0)));
-            core_->write(id,"pose_target",value);
-          });
-          module_interface(id,pose_endpoint,"subscribe","command","pose_target",world_);
-        }
+        const auto pose_endpoint=topic(id+"/control/pose");
+        subscribe<Pose>(pose_endpoint,[this,id,pose_endpoint](const Pose &msg) {
+          const auto p=pose_input(msg,world_,pose_endpoint); const auto &r=p.linear();
+          if(std::abs(p.translation().z())>1e-9 || std::abs(r(2,0))>1e-9 ||
+             std::abs(r(2,1))>1e-9 || std::abs(r(0,2))>1e-9 ||
+             std::abs(r(1,2))>1e-9 || std::abs(r(2,2)-1)>1e-9)
+            throw std::invalid_argument("chassis pose must have zero z and yaw-only rotation");
+          kstone::PortValue value;
+          value.vector=Eigen::Vector3d(p.translation().x(),p.translation().y(),std::atan2(r(1,0),r(0,0)));
+          core_->write(id,"pose_target",value);
+        });
+        module_interface(id,pose_endpoint,"subscribe","command","pose_target",world_);
         auto pub=publisher<Pose>(topic(id+"/feedback/pose"));
         module_interface(id,topic(id+"/feedback/pose"),"publish","odometry","",world_);
         feedback_publish_.push_back([this,pub] { pub->publish(pose_message(core_->chassis_pose(),world_)); });
